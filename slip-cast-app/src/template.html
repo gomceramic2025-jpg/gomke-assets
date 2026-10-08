@@ -1,19 +1,15 @@
-<!doctype html>
-<html lang="vi">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gốm Kể · Tạo khuôn đổ rót</title>
+<title>Gốm Kể Tạo Khuôn</title>
 <style>
   :root {
-    --bg: #faf6f0; --card: #fff; --ink: #3a2e26; --muted: #8a7a6c; --line: #e6dccf;
-    --accent: #b5532f; --accent-ink: #fff; --ok: #3f7d4a; --warn: #b36b00; --err: #b3261e;
+    --bg: #faf6f0; --card: #ffffff; --ink: #3a2e26; --muted: #7d6d5f; --line: #e6dccf;
+    --accent: #b5532f; --accent-ink: #ffffff; --ok: #3f7d4a; --warn: #9a5b00; --err: #b3261e;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #1d1814; --card: #272019; --ink: #efe6dc; --muted: #a8998a; --line: #3b3128; --accent: #d9774f; --accent-ink: #1d1814; --ok: #78c286; --warn: #e3a447; --err: #f08a82; }
+    :root:not([data-theme="light"]) { --bg: #1d1814; --card: #272019; --ink: #efe6dc; --muted: #a8998a; --line: #3b3128; --accent: #d9774f; --accent-ink: #1d1814; --ok: #78c286; --warn: #e3a447; --err: #f08a82; color-scheme: dark; }
   }
+  :root[data-theme="dark"] { --bg: #1d1814; --card: #272019; --ink: #efe6dc; --muted: #a8998a; --line: #3b3128; --accent: #d9774f; --accent-ink: #1d1814; --ok: #78c286; --warn: #e3a447; --err: #f08a82; color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
   header { padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   header h1 { font-size: 17px; margin: 0; }
   header span { color: var(--muted); font-size: 12.5px; }
@@ -49,15 +45,13 @@
     aside { border-right: 0; }
   }
 </style>
-</head>
-<body>
 <header><h1>Gốm Kể · Tạo khuôn đổ rót</h1><span>Từ phôi 3D → khuôn thạch cao nhiều mảnh</span></header>
 <div class="app">
 <aside>
   <section>
     <h2>1. Phôi</h2>
     <div class="row">
-      <button onclick="document.getElementById('file').click()">Tải file STL / OBJ</button>
+      <button id="pick">Tải file STL / OBJ</button>
       <button id="demoTwist">Bình xoắn mẫu</button>
       <button id="demo">Bình trơn</button>
       <input type="file" id="file">
@@ -131,5 +125,3 @@
 <div id="view"><div class="hint">Chuột trái: xoay · Chuột phải: dời · Lăn: phóng to</div></div>
 </div>
 <script>/*APP*/</script>
-</body>
-</html>
