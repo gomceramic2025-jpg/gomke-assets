@@ -1,0 +1,15 @@
+import { chromium } from '/opt/node-tools/node_modules/playwright/index.mjs';
+const d = process.argv[2];
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader','--no-sandbox'] });
+const p = await b.newPage({ viewport: { width: 1280, height: 800 } }); const errs=[]; p.on('pageerror', e=>errs.push(e.message)); p.on('console', m=>m.type()==='error'&&errs.push(m.text()));
+await p.goto('file://' + process.cwd() + '/artifact.html'); await p.waitForTimeout(500);
+await p.click('#tabImg'); await p.click('#imSample'); await p.waitForTimeout(1500);
+console.log(await p.innerText('#imInfo'));
+await p.screenshot({ path: d + '/9_img_lathe.png' });
+await p.selectOption('#imType','relief'); await p.waitForTimeout(2500);
+console.log(await p.innerText('#imInfo'));
+await p.screenshot({ path: d + '/10_img_relief.png' });
+await p.selectOption('#imType','lathe'); await p.waitForTimeout(1500);
+await p.click('#imUse'); await p.waitForFunction(() => /Xong|lỗi/.test(document.getElementById('shStatus').textContent), null, {timeout:90000});
+console.log('sang hop bao:', await p.textContent('#shStatus'), '|', await p.innerText('#phoiInfo').then(t=>t.split('\n')[0]));
+console.log(errs); await b.close();

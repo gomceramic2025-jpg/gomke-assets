@@ -10,6 +10,7 @@ import {
 } from './mold.js';
 import { twistedVase } from './sample.js';
 import { buildShell, invertPhoi } from './shell.js';
+import { colorDiff, otsu, makeMask, extractProfile, latheFromProfile, profileIoU, reliefFromImage } from './photo.js';
 
 const $ = (id) => document.getElementById(id);
 const num = (id) => parseFloat($(id).value) || 0;
@@ -206,8 +207,8 @@ function drawPhoi() {
 }
 
 function applyVisibility() {
-  if (phoiMesh) phoiMesh.visible = !shellMode && $('showPhoi').checked;
-  moldGroup.visible = !shellMode && $('showMold').checked;
+  if (phoiMesh) phoiMesh.visible = !shellMode && !imgMode && $('showPhoi').checked;
+  moldGroup.visible = !shellMode && !imgMode && $('showMold').checked;
   moldGroup.children.forEach((m) => {
     m.material.transparent = $('showPhoi').checked;
     m.material.opacity = $('showPhoi').checked ? 0.35 : 1;
@@ -408,6 +409,10 @@ $('explode').addEventListener('input', applyExplode);
 
 // ================== MODULE HỘP BAO CHIA MẢNH ==================
 let shellMode = true;
+let imgMode = false;
+const imGroup = new THREE.Group();
+scene.add(imGroup);
+let imgGeoMesh = null, imgFit = { r: 100, cy: 90 };
 const shellGroup = new THREE.Group();
 scene.add(shellGroup);
 let shellAngles = [0, 120, 240];
@@ -419,19 +424,26 @@ const DRAFT_COLORS = [[0.35, 0.72, 0.4], [0.95, 0.78, 0.2], [0.88, 0.2, 0.18]];
 
 function setMode(m) {
   shellMode = m === 'shell';
+  imgMode = m === 'img';
   $('modeShell').hidden = !shellMode;
-  $('modeBox').hidden = shellMode;
+  $('modeBox').hidden = m !== 'box';
+  $('modeImg').hidden = !imgMode;
+  $('secPhoi').hidden = imgMode;
   $('tabShell').classList.toggle('on', shellMode);
-  $('tabBox').classList.toggle('on', !shellMode);
+  $('tabBox').classList.toggle('on', m === 'box');
+  $('tabImg').classList.toggle('on', imgMode);
   shellGroup.visible = shellMode;
-  if (phoi) modeRefresh();
+  imGroup.visible = imgMode;
+  if (phoi && !imgMode) modeRefresh();
   applyVisibility();
+  if (imgMode && imgGeoMesh) fitCamera(imgFit.r, imgFit.cy);
 }
 $('tabShell').addEventListener('click', () => setMode('shell'));
 $('tabBox').addEventListener('click', () => setMode('box'));
+$('tabImg').addEventListener('click', () => setMode('img'));
 
 function modeRefresh() {
-  if (!phoi) return;
+  if (!phoi || imgMode) return;
   if (shellMode) shellPhoiChanged();
   else { updateDraft(); }
 }
@@ -650,6 +662,128 @@ $('shDlAll').addEventListener('click', () => {
   if (!shellRes) return;
   const items = shellRes.r.parts.map((p) => ({ name: p.name + '.stl', mesh: new THREE.Mesh(p.geometry) }));
   downloadMany('hop_bao_khuon.zip', items);
+});
+
+
+// ================== MODULE ẢNH → PHÔI ==================
+let im = null;          // { img: {data,width,height}, diff, auto, name }
+let imGeo = null, imKind = 'lathe', imBusy = null;
+const imCanvas = $('imCanvas');
+
+async function imLoad(file) {
+  try {
+    let bmp;
+    try { bmp = await createImageBitmap(file); } catch (e) {
+      bmp = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('Không đọc được ảnh')); i.src = URL.createObjectURL(file); });
+    }
+    const sc = Math.min(1, 1100 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas'); c.width = Math.round(bmp.width * sc); c.height = Math.round(bmp.height * sc);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    imSet(c.getContext('2d').getImageData(0, 0, c.width, c.height), file.name);
+  } catch (e) { $('imInfo').innerHTML = `<span class="warn">Lỗi đọc ảnh: ${e.message}</span>`; }
+}
+
+function imSet(img, name) {
+  const diff = colorDiff(img);
+  im = { img, diff, auto: otsu(diff), name };
+  $('imThr').value = Math.min(140, Math.max(6, im.auto));
+  $('imName').textContent = `${name} · ${img.width}×${img.height} px`;
+  imProcess();
+}
+
+// ảnh mẫu: bình chụp trên nền sáng, có bóng đổ nhẹ
+function sampleImage() {
+  const W = 640, H = 960, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  const bg = x.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#ebebe7'); bg.addColorStop(1, '#d4d4d0');
+  x.fillStyle = bg; x.fillRect(0, 0, W, H);
+  const prof = [[0, 38], [0.06, 44], [0.17, 50], [0.33, 48], [0.53, 36], [0.72, 24], [0.86, 20], [0.94, 22], [1, 24]];
+  const rAt = (t) => { for (let i = 0; i < prof.length - 1; i++) if (t <= prof[i + 1][0]) { const u = (t - prof[i][0]) / (prof[i + 1][0] - prof[i][0]); return prof[i][1] + (prof[i + 1][1] - prof[i][1]) * u * u * (3 - 2 * u); } return 24; };
+  const top = 90, bot = 880, cx = 305, k = 3;
+  x.fillStyle = 'rgba(0,0,0,.12)'; x.beginPath(); x.ellipse(cx + 25, bot + 8, 150, 14, 0, 0, 7); x.fill();
+  const g = x.createLinearGradient(cx - 160, 0, cx + 160, 0);
+  g.addColorStop(0, '#6b4a33'); g.addColorStop(0.35, '#c79566'); g.addColorStop(0.6, '#b07c52'); g.addColorStop(1, '#5a3d2a');
+  x.fillStyle = g; x.beginPath();
+  for (let y = bot; y >= top; y -= 4) { const r = rAt((bot - y) / (bot - top)) * k; if (y === bot) x.moveTo(cx - r, y); else x.lineTo(cx - r, y); }
+  for (let y = top; y <= bot; y += 4) x.lineTo(cx + rAt((bot - y) / (bot - top)) * k, y);
+  x.closePath(); x.fill();
+  return x.getImageData(0, 0, W, H);
+}
+
+function imProcess() {
+  if (!im) return;
+  imKind = $('imType').value;
+  $('imLathe').hidden = imKind !== 'lathe';
+  $('imRelief').hidden = imKind !== 'relief';
+  $('imThrVal').textContent = $('imThr').value;
+  const { img } = im, w = img.width, h = img.height;
+  try {
+    let geo, info = '';
+    const ctx = imCanvas.getContext('2d');
+    imCanvas.width = w; imCanvas.height = h;
+    ctx.putImageData(img, 0, 0);
+    if (imKind === 'lathe') {
+      const mask = makeMask(im.diff, w, h, num('imThr'));
+      const prof = extractProfile(mask, w, h, { heightMm: num('imH'), side: $('imSide').value, smooth: num('imSmooth') });
+      geo = latheFromProfile(prof);
+      const iou = profileIoU(mask, w, prof);
+      // vẽ đường viền mô hình lên ảnh gốc
+      ctx.lineWidth = Math.max(2, w / 300); ctx.strokeStyle = '#e03a2e';
+      ctx.beginPath(); prof.px.forEach((r, i) => { const px = prof.xc - r, py = prof.ys[i]; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }); ctx.stroke();
+      ctx.beginPath(); prof.px.forEach((r, i) => { const px = prof.xc + r, py = prof.ys[i]; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }); ctx.stroke();
+      ctx.setLineDash([10, 8]); ctx.strokeStyle = '#2a8cd6'; ctx.beginPath(); ctx.moveTo(prof.xc, prof.y0); ctx.lineTo(prof.xc, prof.y1); ctx.stroke(); ctx.setLineDash([]);
+      const maxR = Math.max(...prof.r);
+      info = `Đường đỏ là đường viền mô hình, vẽ đè lên ảnh. Độ khớp đường viền với ảnh: <b>${fmt(iou * 100, 2)}%</b><br>` +
+        `Cao ${fmt(num('imH'))} mm · rộng lớn nhất <b>${fmt(maxR * 2, 1)} mm</b> · ${fmt(prof.r.length)} điểm đường viền.<br>` +
+        (iou < 0.97 ? '<span class="warn">⚠ Độ khớp thấp: vật có thể không đối xứng, ảnh bị nghiêng, hoặc tách nền chưa đúng. Chỉnh “Độ nhạy tách nền” hoặc thử lấy một bên.</span>' : '<span class="ok">✓ Đường viền khớp ảnh.</span>');
+      $('imNote').textContent = 'Độ khớp đo trên chính ảnh này (đường viền 2D). Phần khuất không có trong ảnh nên thân được coi là tròn xoay.';
+    } else {
+      const r = reliefFromImage(img, { widthMm: num('imW'), depthMm: num('imDepth'), baseMm: num('imBase'), invert: !$('imBright').checked, gamma: 100 / num('imGamma'), blur: num('imBlur'), cut: $('imCut').checked, thr: num('imThr') || null, gridW: 160 });
+      geo = r.geometry;
+      const hc = document.createElement('canvas'); hc.width = r.gw; hc.height = r.gh;
+      const hx = hc.getContext('2d'), id = hx.createImageData(r.gw, r.gh);
+      for (let i = 0; i < r.hgt.length; i++) { const v = Math.round(r.hgt[i] * 255); id.data.set([v, v, v, 255], i * 4); }
+      hx.putImageData(id, 0, 0);
+      imCanvas.width = w * 2 + 12; imCanvas.height = h; ctx.fillStyle = '#888'; ctx.fillRect(0, 0, imCanvas.width, h);
+      ctx.putImageData(img, 0, 0); ctx.imageSmoothingEnabled = false; ctx.drawImage(hc, w + 12, 0, w, h);
+      const bb = new THREE.Box3().setFromBufferAttribute(geo.attributes.position), sz = bb.getSize(new THREE.Vector3());
+      info = `Trái: ảnh gốc. Phải: bản đồ độ cao (sáng = nổi).<br>Phôi ${fmt(sz.x)} × ${fmt(sz.z)} mm, dày ${fmt(sz.y, 1)} mm · ${fmt(geo.index.count / 3)} mặt.`;
+      $('imNote').textContent = 'Độ cao suy ra từ độ sáng tối, không phải độ sâu thật. Hợp với tranh và phù điêu in đơn sắc; cần chỉnh tay chi tiết quan trọng.';
+    }
+    imGeo = geo;
+    $('imInfo').innerHTML = info;
+    $('imUse').disabled = imKind !== 'lathe'; $('imDl').disabled = false;
+    imShow(geo);
+  } catch (e) { imGeo = null; $('imInfo').innerHTML = `<span class="warn">${e.message}</span>`; $('imUse').disabled = true; $('imDl').disabled = true; }
+}
+
+function imShow(geo) {
+  while (imGroup.children.length) { const m = imGroup.children.pop(); m.geometry.dispose(); }
+  const g = geo.clone(); g.computeBoundingBox();
+  const bb = g.boundingBox;
+  g.translate(-(bb.min.x + bb.max.x) / 2, imKind === 'lathe' ? 0 : -bb.min.y, -(bb.min.z + bb.max.z) / 2);
+  g.computeBoundingBox();
+  imGeoMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xd9bfa0, roughness: 0.85 }));
+  imGroup.add(imGeoMesh);
+  const sz = g.boundingBox.getSize(new THREE.Vector3());
+  imFit = { r: Math.max(sz.x, sz.z, sz.y) * 0.6, cy: sz.y / 2 };
+  if (imMode0()) fitCamera(imFit.r, imFit.cy);
+}
+const imMode0 = () => imgMode;
+
+$('imPick').addEventListener('click', () => $('imFile').click());
+$('imFile').addEventListener('change', (e) => e.target.files[0] && imLoad(e.target.files[0]));
+$('imSample').addEventListener('click', () => { imSet(sampleImage(), 'Ảnh mẫu (bình)'); });
+['imType', 'imH', 'imSide', 'imSmooth', 'imW', 'imDepth', 'imBase', 'imBright', 'imCut', 'imGamma', 'imBlur', 'imThr'].forEach((id) =>
+  $(id).addEventListener(id === 'imThr' || id === 'imSmooth' || id === 'imGamma' || id === 'imBlur' ? 'input' : 'change', () => {
+    clearTimeout(imBusy); imBusy = setTimeout(() => { if (id === 'imType' && im) { $('imThr').value = Math.min(140, Math.max(6, im.auto)); } imProcess(); }, 120);
+  }));
+$('imDl').addEventListener('click', () => imGeo && download(new THREE.Mesh(imGeo), imKind === 'lathe' ? 'phoi_tron_xoay_tu_anh.stl' : 'phu_dieu_tu_anh.stl'));
+$('imUse').addEventListener('click', () => {
+  if (!imGeo || imKind !== 'lathe') return;
+  $('unit').value = '1';
+  setMode('shell');
+  setBase(imGeo, 'Phôi từ ảnh: ' + (im ? im.name : ''));
 });
 
 $('pick').addEventListener('click', () => $('file').click());

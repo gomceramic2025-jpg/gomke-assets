@@ -56,8 +56,8 @@
 <header><h1>Gốm Kể · Tạo khuôn đổ rót</h1><span>Từ phôi 3D → khuôn thạch cao nhiều mảnh</span></header>
 <div class="app">
 <aside>
-  <div class="tabs"><button id="tabShell" class="on">Hộp bao chia mảnh</button><button id="tabBox">Khuôn 2 mảnh (hộp đổ)</button></div>
-  <section>
+  <div class="tabs"><button id="tabImg">Ảnh → phôi</button><button id="tabShell" class="on">Hộp bao</button><button id="tabBox">Khuôn 2 mảnh</button></div>
+  <section id="secPhoi">
     <h2>1. Phôi</h2>
     <div class="row">
       <button id="pick">Tải file STL / OBJ</button>
@@ -80,6 +80,48 @@
     <div class="info" id="phoiInfo"></div>
   </section>
 
+
+<div id="modeImg" hidden>
+  <section>
+    <h2>Ảnh → phôi 3D</h2>
+    <div class="muted">Dựng bằng thuật toán, không đoán mò: tròn xoay lấy đường viền thật từ ảnh; phù điêu lấy độ cao từ độ sáng tối. Chụp thẳng, nền trơn, đứng xa và zoom để ít méo.</div>
+    <div class="row"><button id="imPick">Chọn ảnh</button><button id="imSample">Ảnh mẫu</button><input type="file" id="imFile" accept="image/*" style="display:none"></div>
+    <label>Loại sản phẩm
+      <select id="imType" style="width:auto"><option value="lathe">Tròn xoay (bình, cốc, hũ)</option><option value="relief">Phù điêu (tranh gốm)</option></select>
+    </label>
+    <canvas id="imCanvas" width="10" height="10" style="width:100%;max-height:340px;object-fit:contain;border:1px solid var(--line);border-radius:8px;margin-top:6px;background:var(--bg)"></canvas>
+    <div class="muted" id="imName">Chưa có ảnh.</div>
+  </section>
+
+  <section id="imLathe">
+    <h2>Thông số tròn xoay</h2>
+    <label>Chiều cao thật sau nung (mm) <input type="number" id="imH" value="180" min="10" step="1"></label>
+    <label class="col">Độ nhạy tách nền <b id="imThrVal"></b><input type="range" id="imThr" min="6" max="140" value="30"></label>
+    <label>Lấy bán kính từ
+      <select id="imSide" style="width:auto"><option value="both">Hai bên (trung bình)</option><option value="left">Bên trái</option><option value="right">Bên phải</option></select>
+    </label>
+    <label class="col">Làm mượt đường viền <input type="range" id="imSmooth" min="0" max="15" value="5"></label>
+  </section>
+
+  <section id="imRelief" hidden>
+    <h2>Thông số phù điêu</h2>
+    <label>Chiều rộng thật (mm) <input type="number" id="imW" value="120" min="10" step="1"></label>
+    <label>Độ nổi tối đa (mm) <input type="number" id="imDepth" value="8" min="1" step="0.5"></label>
+    <label>Độ dày nền (mm) <input type="number" id="imBase" value="4" min="1" step="0.5"></label>
+    <label>Vùng sáng nổi lên, vùng tối lõm xuống <input type="checkbox" id="imBright" checked></label>
+    <label>Cắt bỏ nền ảnh <input type="checkbox" id="imCut" checked></label>
+    <label class="col">Độ tương phản <input type="range" id="imGamma" min="30" max="250" value="100"></label>
+    <label class="col">Làm mượt <input type="range" id="imBlur" min="0" max="4" value="1"></label>
+  </section>
+
+  <section>
+    <h2>Kết quả</h2>
+    <div class="info" id="imInfo"><span class="muted">Chọn ảnh hoặc bấm “Ảnh mẫu”.</span></div>
+    <div class="row"><button class="primary" id="imUse" disabled>Dùng làm phôi, sang Hộp bao</button></div>
+    <div class="row"><button id="imDl" disabled>Tải STL phôi</button></div>
+    <div class="muted" id="imNote"></div>
+  </section>
+</div>
 <div id="modeBox" hidden>
   <section>
     <h2>2. Chia khuôn</h2>
