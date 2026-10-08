@@ -174,7 +174,114 @@ function stripGeo(g) {
   return out;
 }
 
+function frameGeo(g, aDeg) { g.rotateY(-aDeg * DEG); return g; }
+// Hộp trong hệ tọa độ của mặt chia: x = u (dọc mặt chia), z = v (vuông góc, hướng vào mảnh), y = trục đứng.
+function boxAt(aDeg, u0, u1, v0, v1, y0, y1) {
+  const g = new THREE.BoxGeometry(u1 - u0, y1 - y0, v1 - v0);
+  g.translate((u0 + u1) / 2, (y0 + y1) / 2, (v0 + v1) / 2);
+  return frameGeo(g, aDeg);
+}
+
+// Khuôn 2 mảnh dạng hộp chữ nhật: đổ được trong hộp đổ in 3D.
+function buildBoxMold(phoi, o, onProgress) {
+  const { theta0, wall, base, spare, pourR, keys, tol } = o;
+  const st = phoiStats(phoi);
+  const H = st.H, top = H + spare, bottom = -base;
+  const pp = phoi.attributes.position;
+  const ev = new Evaluator();
+  ev.attributes = ['position', 'normal'];
+  ev.useGroups = false;
+  const proj = (a) => {
+    const c = Math.cos(a * DEG), s = Math.sin(a * DEG);
+    let eu = 0, vmax = 0, vmin = 0;
+    for (let i = 0; i < pp.count; i++) {
+      const x = pp.getX(i), z = pp.getZ(i);
+      eu = Math.max(eu, Math.abs(x * c + z * s));
+      const v = -x * s + z * c;
+      vmax = Math.max(vmax, v); vmin = Math.min(vmin, v);
+    }
+    return { eu, vmax, vmin };
+  };
+  const p0 = proj(theta0), p1 = proj(theta0 + 180);
+  const U = Math.max(p0.eu, p1.eu) + wall;
+  const T = Math.max(p0.vmax, p1.vmax) + wall;
+  const keyR = Math.min(8, Math.max(3, wall * 0.28));
+
+  const holeLen = spare + 1.5;
+  const holeG = new THREE.CylinderGeometry(pourR, pourR, holeLen, 48);
+  holeG.translate(0, H - 0.5 + holeLen / 2, 0);
+  const holeB = toBrush(holeG), phoiB = toBrush(phoi);
+  const spots = [];
+  for (const f of [0.25, 0.75]) {
+    const y = H * f, band = Math.max(H * 0.08, 3);
+    let eu = 0;
+    for (let i = 0; i < pp.count; i++) if (Math.abs(pp.getY(i) - y) < band) eu = Math.max(eu, Math.hypot(pp.getX(i), pp.getZ(i)));
+    if (eu === 0) eu = st.rmax;
+    spots.push({ y, u: Math.min((eu + U) / 2, U - keyR - 2) });
+  }
+
+  const pieces = [];
+  for (let k = 0; k < 2; k++) {
+    onProgress(`Cắt mảnh ${k + 1}/2...`);
+    const aS = theta0 + k * 180;
+    let piece = ev.evaluate(toBrush(boxAt(aS, -U, U, 0, T, bottom, top)), holeB, SUBTRACTION);
+    piece = ev.evaluate(toBrush(piece.geometry), phoiB, SUBTRACTION);
+    if (keys) {
+      for (const sp of spots) {
+        // ổ lõm (cái) ở phía +u, chốt lồi (đực) ở phía -u; mảnh kia ngược lại nên khớp nhau
+        const male = new THREE.SphereGeometry(keyR, 24, 16);
+        male.translate(-sp.u, sp.y, 0);
+        piece = ev.evaluate(toBrush(piece.geometry), toBrush(frameGeo(male, aS)), ADDITION);
+        const fem = new THREE.SphereGeometry(keyR + tol, 24, 16);
+        fem.translate(sp.u, sp.y, 0);
+        piece = ev.evaluate(toBrush(piece.geometry), toBrush(frameGeo(fem, aS)), SUBTRACTION);
+      }
+    }
+    const geo = stripGeo(piece.geometry);
+    pieces.push({ geometry: geo, raw: piece.geometry, volume: Math.abs(meshVolume(geo)), mid: (aS + 90) * DEG, aStart: aS });
+  }
+  return { shape: 'box', pieces, R: Math.max(U, T), U, T, top, bottom, keyR, tol, dims: { W: 2 * U, T, H: top - bottom } };
+}
+
+// Hộp đổ in 3D cho 1 mảnh: sàn = mặt chia, có sẵn nửa phôi, lỗ rót và chốt nhô lên. Đổ thạch cao tới mép tường.
+export function buildCasing(mold, k, wc = 3) {
+  // Đôi khi CSG gặp mặt trùng khít do số học; thử lại với sai lệch rất nhỏ (< 0,1 mm).
+  let err;
+  for (const j of [0, 0.013, 0.031, 0.057, 0.083]) {
+    try { return casingAttempt(mold, k, wc, j); } catch (e) { err = e; }
+  }
+  throw err;
+}
+
+function casingAttempt(mold, k, wc, j) {
+  const { U, T, top, bottom, keyR, tol } = mold;
+  const piece = mold.pieces[k];
+  const aS = piece.aStart, lip = 5;
+  const fT = keyR + tol + 3;
+  const ev = new Evaluator();
+  ev.attributes = ['position', 'normal'];
+  ev.useGroups = false;
+  const outer = boxAt(aS, -(U + wc), U + wc, -fT, T + lip, bottom - wc, top + wc);
+  const cut = boxAt(aS, -U, U, 0, T + lip + 5, bottom, top);
+  let c = ev.evaluate(toBrush(outer), toBrush(cut), SUBTRACTION);
+  // lấp phần lòng hộp (0..T) rồi trừ mảnh khuôn: còn lại nửa phôi + trụ rót + chốt
+  const h = wc / 2 + j * 3;
+  c = ev.evaluate(toBrush(c.geometry), toBrush(boxAt(aS, -(U + h), U + h, -fT / 2, T - 0.01 - j, bottom - h, top + h)), ADDITION);
+  // Làm sạch mặt suy biến (mảnh vụn sinh ra khi cắt chốt) để phép trừ không bị lỗi
+  c = ev.evaluate(toBrush(c.geometry), toBrush(cleanGeometry(piece.raw)), SUBTRACTION);
+  const g = stripGeo(c.geometry);
+  // đặt nằm trên bàn in: mặt chia nằm ngang, hướng lên
+  g.rotateY(aS * DEG);
+  g.rotateX(-Math.PI / 2);
+  g.computeBoundingBox();
+  g.translate(-(g.boundingBox.min.x + g.boundingBox.max.x) / 2, -g.boundingBox.min.y, -(g.boundingBox.min.z + g.boundingBox.max.z) / 2);
+  g.computeBoundingBox();
+  const bb = g.boundingBox;
+  return { geometry: g, size: [bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z], volume: Math.abs(meshVolume(g)) };
+}
+
 export function buildMold(phoi, o, onProgress = () => {}) {
+  if (o.shape === 'box') return buildBoxMold(phoi, o, onProgress);
   const { n, theta0, wall, base, spare, pourR, keys, tol } = o;
   const st = phoiStats(phoi);
   const H = st.H, R = st.rmax + wall;
@@ -226,7 +333,7 @@ export function buildMold(phoi, o, onProgress = () => {}) {
     const geo = stripGeo(piece.geometry);
     pieces.push({ geometry: geo, volume: Math.abs(meshVolume(geo)), mid: (a0 + span / 2) * DEG });
   }
-  return { pieces, R, top, bottom, dims: { D: 2 * R, H: top - bottom } };
+  return { shape: 'round', pieces, R, top, bottom, dims: { D: 2 * R, H: top - bottom } };
 }
 
 // ---------- Tính thạch cao ----------

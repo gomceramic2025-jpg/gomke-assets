@@ -1,0 +1,13 @@
+import { chromium } from '/opt/node-tools/node_modules/playwright/index.mjs';
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader','--no-sandbox'] });
+const p = await b.newPage({ viewport: { width: 1280, height: 800 } }); const errs=[]; p.on('pageerror', e=>errs.push(e.message));
+await p.goto('file://' + process.cwd() + '/index.html');
+await p.click('#demo'); await p.click('#build');
+await p.waitForFunction(() => /Xong|lỗi/.test(document.getElementById('status').textContent), null, {timeout:60000});
+console.log(await p.innerText('#moldInfo'));
+await p.fill('#explode','50'); await p.dispatchEvent('#explode','input'); await p.uncheck('#showPhoi'); await p.waitForTimeout(400);
+await p.screenshot({ path: process.argv[2]+'/3_box.png' });
+const [d] = await Promise.all([p.waitForEvent('download', {timeout:60000}), p.click('#dlCasings button')]);
+await d.saveAs(process.argv[2]+'/hop.stl'); console.log(d.suggestedFilename(), await p.textContent('#status'));
+await p.selectOption('#n','3'); console.log('shape after n=3:', await p.inputValue('#shape'));
+console.log(errs); await b.close();

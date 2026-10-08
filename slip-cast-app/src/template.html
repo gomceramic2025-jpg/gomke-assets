@@ -79,6 +79,10 @@
     <label>Số mảnh
       <select id="n"><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select>
     </label>
+    <label>Dạng khối khuôn
+      <select id="shape"><option value="box">Hộp chữ nhật (có hộp đổ)</option><option value="round">Khối tròn</option></select>
+    </label>
+    <div class="muted" id="shapeNote">Hộp chữ nhật chỉ dùng cho 2 mảnh. Hộp đổ in 3D là khay có sẵn nửa phôi; đổ thạch cao vào là ra nửa khuôn.</div>
     <label class="col">Góc bắt đầu chia <b id="thetaVal">0°</b>
       <input type="range" id="theta" min="0" max="180" step="1" value="0">
     </label>
@@ -114,6 +118,9 @@
 
   <section>
     <h2>5. Xuất file STL</h2>
+    <div class="muted">Hộp đổ in 3D (đổ thạch cao vào là ra khuôn):</div>
+    <div class="row" id="dlCasings"><span class="muted">Tạo khuôn dạng hộp để có hộp đổ.</span></div>
+    <div class="muted">Xuất khuôn trực tiếp:</div>
     <div class="row"><button id="dlPhoi">Phôi (đã bù co ngót)</button><button id="dlAll" disabled>Tất cả mảnh khuôn</button></div>
     <div class="row" id="dlPieces"></div>
   </section>

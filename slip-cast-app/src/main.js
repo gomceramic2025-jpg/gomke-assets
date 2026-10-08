@@ -5,7 +5,7 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import {
   cleanGeometry, orientPhoi, phoiStats, countOpenEdges, prepareFaces,
-  analyzeDraft, bestTheta, buildMold, plasterCalc,
+  analyzeDraft, bestTheta, buildMold, buildCasing, plasterCalc,
 } from './mold.js';
 
 const $ = (id) => document.getElementById(id);
@@ -124,6 +124,7 @@ function clearMold() {
   $('moldInfo').innerHTML = '<span class="muted">Chưa tạo khuôn. Chỉnh thông số rồi bấm “Tạo khuôn”.</span>';
   ['dlAll'].forEach((id) => ($(id).disabled = true));
   $('dlPieces').innerHTML = '';
+  $('dlCasings').innerHTML = '<span class="muted">Tạo khuôn dạng hộp để có hộp đổ.</span>';
   $('plasterInfo').innerHTML = '';
 }
 
@@ -211,7 +212,7 @@ const COLORS = [0xd9a066, 0x8fb8a8, 0xc98a8a, 0x9fa6d6, 0xd6c46f, 0xb8a1c9];
 $('build').addEventListener('click', () => {
   if (!phoi) return status('Hãy tải phôi (STL/OBJ) hoặc bấm “Bình mẫu” trước.', true);
   const o = {
-    n: parseInt($('n').value), theta0: num('theta'), wall: num('wall'), base: num('base'),
+    shape: boxMode() ? 'box' : 'round', n: parseInt($('n').value), theta0: num('theta'), wall: num('wall'), base: num('base'),
     spare: Math.max(5, num('spare')), pourR: num('pourR'), keys: $('keys').checked, tol: num('tol'),
   };
   if (o.wall < 10) return status('Thành khuôn nên từ 10 mm trở lên.', true);
@@ -231,7 +232,7 @@ $('build').addEventListener('click', () => {
       applyVisibility();
       applyExplode();
       showMoldInfo();
-      fitCamera(mold.R, (mold.top + mold.bottom) / 2);
+      fitCamera(Math.max(mold.R, (mold.top - mold.bottom) / 2), (mold.top + mold.bottom) / 2);
       status(`Xong trong ${fmt((performance.now() - t0) / 1000, 1)} giây.`);
     } catch (e) {
       console.error(e);
@@ -242,10 +243,21 @@ $('build').addEventListener('click', () => {
   }, 30);
 });
 
+const boxMode = () => $('shape').value === 'box' && $('n').value === '2';
+
+function syncShape() {
+  const two = $('n').value === '2';
+  $('shape').querySelector('option[value=box]').disabled = !two;
+  if (!two) $('shape').value = 'round';
+}
+
 function showMoldInfo() {
   const total = mold.pieces.reduce((s, p) => s + p.volume, 0);
+  const dim = mold.shape === 'box'
+    ? `khối hộp ${fmt(mold.dims.W)} × ${fmt(mold.dims.T)} × ${fmt(mold.dims.H)} mm / mảnh`
+    : `khuôn tròn Ø${fmt(mold.dims.D)} × cao ${fmt(mold.dims.H)} mm`;
   $('moldInfo').innerHTML =
-    `${mold.pieces.length} mảnh · khuôn tròn Ø${fmt(mold.dims.D)} × cao ${fmt(mold.dims.H)} mm<br>` +
+    `${mold.pieces.length} mảnh · ${dim}<br>` +
     `Thể tích thạch cao: <b>${fmt(total / 1e6, 2)} lít</b>`;
   $('dlAll').disabled = false;
   $('dlPieces').innerHTML = '';
@@ -255,6 +267,25 @@ function showMoldInfo() {
     b.addEventListener('click', () => download(new THREE.Mesh(p.geometry), `khuon_manh${i + 1}.stl`));
     $('dlPieces').appendChild(b);
   });
+  $('dlCasings').innerHTML = '';
+  if (mold.shape === 'box') {
+    mold.pieces.forEach((p, i) => {
+      const b = document.createElement('button');
+      b.textContent = `Hộp đổ mảnh ${i + 1}`;
+      b.addEventListener('click', () => {
+        b.disabled = true; status(`Đang tạo hộp đổ mảnh ${i + 1}...`);
+        setTimeout(() => {
+          try {
+            const c = buildCasing(mold, i);
+            download(new THREE.Mesh(c.geometry), `hop_do_manh${i + 1}.stl`);
+            status(`Hộp đổ mảnh ${i + 1}: ${fmt(c.size[0])} × ${fmt(c.size[2])} × ${fmt(c.size[1])} mm, khoảng ${fmt(c.volume / 1000)} cm³ nhựa đặc (slicer sẽ để rỗng bớt). Đặt mặt sàn xuống bàn in, đổ thạch cao tới mép tường.`);
+          } catch (e) { console.error(e); status('Tạo hộp đổ lỗi: ' + e.message, true); }
+          b.disabled = false;
+        }, 30);
+      });
+      $('dlCasings').appendChild(b);
+    });
+  } else $('dlCasings').innerHTML = '<span class="muted">Chỉ có khi chọn 2 mảnh dạng hộp chữ nhật.</span>';
   showPlaster();
 }
 
@@ -288,7 +319,8 @@ $('dlAll').addEventListener('click', () => {
 
 // ---------- Sự kiện thông số ----------
 ['unit', 'shrink'].forEach((id) => $(id).addEventListener('change', () => rebuildPhoi(true)));
-['n', 'theta', 'minDraft'].forEach((id) => $(id).addEventListener('input', () => { clearMold(); updateDraft(); }));
+['n', 'theta', 'minDraft'].forEach((id) => $(id).addEventListener('input', () => { syncShape(); clearMold(); updateDraft(); }));
+$('shape').addEventListener('change', clearMold);
 ['wall', 'base', 'spare', 'pourR', 'keys', 'tol'].forEach((id) => $(id).addEventListener('change', clearMold));
 $('autoTheta').addEventListener('click', () => {
   if (!faces) return;
