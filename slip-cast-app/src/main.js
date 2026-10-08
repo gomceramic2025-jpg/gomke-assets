@@ -7,6 +7,7 @@ import {
   cleanGeometry, orientPhoi, phoiStats, countOpenEdges, prepareFaces,
   analyzeDraft, bestTheta, buildMold, buildCasing, plasterCalc,
 } from './mold.js';
+import { twistedVase } from './sample.js';
 
 const $ = (id) => document.getElementById(id);
 const num = (id) => parseFloat($(id).value) || 0;
@@ -14,14 +15,22 @@ const fmt = (v, d = 0) => v.toLocaleString('vi-VN', { maximumFractionDigits: d, 
 
 // ---------- Cảnh 3D ----------
 const view = $('view');
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-view.appendChild(renderer.domElement);
+let renderer = null;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  view.appendChild(renderer.domElement);
+} catch (e) {
+  const m = document.createElement('div');
+  m.style.cssText = 'padding:24px;color:#b3261e';
+  m.textContent = 'Trình duyệt này không bật được WebGL nên không hiện được 3D. Hãy mở file bằng Chrome hoặc Safari trực tiếp (không mở trong khung xem trước của ứng dụng khác).';
+  view.appendChild(m);
+}
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf4efe8);
 const camera = new THREE.PerspectiveCamera(40, 1, 1, 5000);
 camera.position.set(300, 250, 380);
-const controls = new OrbitControls(camera, renderer.domElement);
+const controls = new OrbitControls(camera, renderer ? renderer.domElement : view);
 controls.enableDamping = true;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x998877, 1.1));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6);
@@ -32,13 +41,13 @@ scene.add(grid);
 
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
-  renderer.setSize(w, h);
+  if (renderer) renderer.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe(view);
 resize();
-(function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); })();
+(function loop() { controls.update(); if (renderer) renderer.render(scene, camera); requestAnimationFrame(loop); })();
 
 function fitCamera(r, cy) {
   controls.target.set(0, cy, 0);
@@ -70,6 +79,7 @@ function setBase(geo, name) {
 
 function loadFile(file) {
   const ext = file.name.split('.').pop().toLowerCase();
+  if (ext !== 'stl' && ext !== 'obj') return status('Chỉ nhận file .stl hoặc .obj', true);
   const reader = new FileReader();
   reader.onload = () => {
     try {
@@ -102,6 +112,9 @@ $('file').addEventListener('change', (e) => e.target.files[0] && loadFile(e.targ
 const drop = $('view');
 drop.addEventListener('dragover', (e) => e.preventDefault());
 drop.addEventListener('drop', (e) => { e.preventDefault(); e.dataTransfer.files[0] && loadFile(e.dataTransfer.files[0]); });
+
+$('demoTwist').addEventListener('click', () => setBase(twistedVase(), 'Bình xoắn mẫu (demo)'));
+$('dlSample').addEventListener('click', () => download(new THREE.Mesh(twistedVase()), 'binh_xoan_mau.stl'));
 
 $('demo').addEventListener('click', () => {
   const prof = [[0, 0], [28, 0], [34, 6], [48, 40], [52, 70], [44, 110], [26, 140], [22, 160], [26, 172], [26, 180], [0, 180]]
@@ -335,3 +348,6 @@ $('explode').addEventListener('input', applyExplode);
 ['ratio', 'waste'].forEach((id) => $(id).addEventListener('input', showPlaster));
 
 window.__app = { THREE, scene, camera, controls, renderer };
+
+// Mở app là có sẵn phôi mẫu để thấy khu vực làm việc
+$('demoTwist').click();

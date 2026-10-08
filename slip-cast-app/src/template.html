@@ -44,7 +44,8 @@
   #file { display: none; }
   @media (max-width: 760px) {
     .app { grid-template-columns: 1fr; height: auto; }
-    #view { height: 55vh; order: -1; }
+    #view { height: 42vh; min-height: 240px; order: -1; position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
+    .hint { display: none; }
     aside { border-right: 0; }
   }
 </style>
@@ -57,9 +58,11 @@
     <h2>1. Phôi</h2>
     <div class="row">
       <button onclick="document.getElementById('file').click()">Tải file STL / OBJ</button>
-      <button id="demo">Bình mẫu</button>
-      <input type="file" id="file" accept=".stl,.obj">
+      <button id="demoTwist">Bình xoắn mẫu</button>
+      <button id="demo">Bình trơn</button>
+      <input type="file" id="file">
     </div>
+    <div class="row"><button id="dlSample">Tải file STL mẫu về máy</button></div>
     <div class="muted" id="fileName">Chưa có phôi. Có thể kéo thả file vào khung 3D.</div>
     <label>Đơn vị file
       <select id="unit"><option value="1">mm</option><option value="10">cm</option><option value="1000">m</option><option value="25.4">inch</option></select>

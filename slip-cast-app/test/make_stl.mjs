@@ -3,7 +3,7 @@ import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import { writeFileSync } from 'node:fs';
 import { cleanGeometry, orientPhoi, phoiStats, countOpenEdges, prepareFaces, analyzeDraft, bestTheta, buildMold, buildCasing } from '../src/mold.js';
 
-// Bình xoắn cao 180 mm, thân phình, rãnh xoắn 6 cánh, miệng phẳng để rót
+
 const prof = [[0,38],[10,44],[30,50],[60,48],[95,36],[130,24],[155,20],[170,22],[180,24]]; // [y, r]
 const NT = 120, NY = 60, FL = 6, TW = 1.6;
 const rAt = (y) => { for (let i=0;i<prof.length-1;i++){ const [y0,r0]=prof[i],[y1,r1]=prof[i+1]; if(y<=y1){ const t=(y-y0)/(y1-y0); const s=t*t*(3-2*t); return r0+(r1-r0)*s; } } return prof.at(-1)[1]; };
