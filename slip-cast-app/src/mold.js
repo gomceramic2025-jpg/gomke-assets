@@ -160,13 +160,13 @@ function wedgeGeometry(a0, span, L, y0, depth) {
   return g;
 }
 
-function toBrush(g) {
+export function toBrush(g) {
   const b = new Brush(g);
   b.updateMatrixWorld(true);
   return b;
 }
 
-function stripGeo(g) {
+export function stripGeo(g) {
   const out = new THREE.BufferGeometry();
   const ng = g.index ? g.toNonIndexed() : g;
   out.setAttribute('position', ng.attributes.position);
@@ -345,4 +345,49 @@ export function plasterCalc(volMm3, ratio, wastePct) {
   const V = (volMm3 / 1000) * (1 + wastePct / 100); // cm3 hồ cần pha
   const plaster = V / (1 / PLASTER_DENSITY + ratio);
   return { slurryMl: V, plasterG: plaster, waterMl: plaster * ratio };
+}
+
+// ---------- Phân tích với danh sách góc mặt chia tùy ý (module hộp bao) ----------
+
+// angles: các góc (độ) của vách chia, sắp tăng dần. Mỗi mảnh nằm giữa 2 vách liên tiếp, kéo ra theo phân giác.
+export function sectorsFromAngles(angles) {
+  const a = [...angles].map((x) => ((x % 360) + 360) % 360).sort((x, y) => x - y);
+  return a.map((s, i) => {
+    const e = i + 1 < a.length ? a[i + 1] : a[0] + 360;
+    return { a0: s, a1: e, span: e - s, mid: (s + e) / 2 };
+  });
+}
+
+export function analyzeDraftAngles(F, angles, minDraftDeg = 1) {
+  const sec = sectorsFromAngles(angles), lim = Math.sin(minDraftDeg * DEG);
+  const cls = new Uint8Array(F.nt), area = [0, 0, 0];
+  for (let t = 0; t < F.nt; t++) {
+    let c = 0;
+    if (Math.abs(F.ny[t]) < 0.985) {
+      let ang = ((F.ang[t] % 360) + 360) % 360;
+      let k = sec.findIndex((s) => (ang >= s.a0 && ang < s.a1) || (ang + 360 >= s.a0 && ang + 360 < s.a1));
+      if (k < 0) k = 0;
+      const mid = sec[k].mid * DEG;
+      const d = F.nx[t] * Math.cos(mid) + F.nz[t] * Math.sin(mid);
+      c = d < -0.02 ? 2 : d < lim ? 1 : 0;
+    }
+    cls[t] = c; area[c] += F.area[t];
+  }
+  return { cls, area, sectors: sec, maxSpan: Math.max(...sec.map((s) => s.span)) };
+}
+
+// Thử chia đều 2..8 mảnh, mọi góc bắt đầu; chọn phương án ít undercut nhất, ưu tiên ít mảnh.
+export function bestLayout(F, minDraftDeg = 1, nMax = 8) {
+  let best = null;
+  for (let n = 2; n <= nMax; n++) {
+    const s = 360 / n;
+    for (let t = 0; t < s; t += 3) {
+      const ang = Array.from({ length: n }, (_, i) => t + i * s);
+      const r = analyzeDraftAngles(F, ang, minDraftDeg).area;
+      const tot = r[0] + r[1] + r[2] || 1;
+      const score = (r[2] * 10 + r[1]) / tot + 0.004 * (n - 2);
+      if (!best || score < best.score) best = { n, theta0: t, score, angles: ang };
+    }
+  }
+  return best;
 }

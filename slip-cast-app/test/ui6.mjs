@@ -1,0 +1,11 @@
+import { chromium } from '/opt/node-tools/node_modules/playwright/index.mjs';
+const d = process.argv[2];
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader','--no-sandbox'] });
+const p = await b.newPage({ viewport: { width: 1280, height: 800 } }); const errs=[]; p.on('pageerror', e=>errs.push(e.message)); p.on('console', m=>m.type()==='error'&&errs.push(m.text()));
+await p.goto('file://' + process.cwd() + '/index.html');
+await p.waitForFunction(() => /Xong|lỗi/.test(document.getElementById('shStatus').textContent), null, { timeout: 90000 });
+console.log(await p.textContent('#shStatus')); console.log(await p.innerText('#shDraft')); console.log(await p.innerText('#shInfo')); console.log(await p.innerText('#shPlaster'));
+await p.screenshot({ path: d + '/7_shell.png' });
+await p.fill('#shExplode','60'); await p.dispatchEvent('#shExplode','input'); await p.waitForTimeout(500);
+await p.screenshot({ path: d + '/8_shell_explode.png' });
+console.log(errs); await b.close();

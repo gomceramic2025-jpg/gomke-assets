@@ -38,6 +38,14 @@
   .dot.g { background: #59b866; } .dot.y { background: #f2c733; } .dot.r { background: #e13a2e; }
   .info { font-size: 13px; margin-top: 8px; }
   #file { display: none; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+  .tabs button { flex: 1; padding: 9px 6px; font-weight: 600; }
+  .tabs button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .angrow { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+  .angrow span { width: 62px; color: var(--muted); font-size: 12.5px; }
+  .angrow input { width: 84px; }
+  .angrow button { padding: 5px 10px; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
   @media (max-width: 760px) {
     .app { grid-template-columns: 1fr; height: auto; }
     #view { height: 42vh; min-height: 240px; order: -1; position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
@@ -48,6 +56,7 @@
 <header><h1>Gốm Kể · Tạo khuôn đổ rót</h1><span>Từ phôi 3D → khuôn thạch cao nhiều mảnh</span></header>
 <div class="app">
 <aside>
+  <div class="tabs"><button id="tabShell" class="on">Hộp bao chia mảnh</button><button id="tabBox">Khuôn 2 mảnh (hộp đổ)</button></div>
   <section>
     <h2>1. Phôi</h2>
     <div class="row">
@@ -71,6 +80,7 @@
     <div class="info" id="phoiInfo"></div>
   </section>
 
+<div id="modeBox" hidden>
   <section>
     <h2>2. Chia khuôn</h2>
     <label>Số mảnh
@@ -121,6 +131,58 @@
     <div class="row"><button id="dlPhoi">Phôi (đã bù co ngót)</button><button id="dlAll" disabled>Tất cả mảnh khuôn</button></div>
     <div class="row" id="dlPieces"></div>
   </section>
+</div>
+
+<div id="modeShell">
+  <section>
+    <h2>2. Phân tích &amp; chia mảnh</h2>
+    <div class="muted">Hộp bao gồm đế, các vách chia hình tia và vỏ ngoài uốn theo phôi. Đổ thạch cao một lần, thạch cao tự chia thành từng mảnh.</div>
+    <div class="row"><button class="primary" id="shAuto">Tự phân tích &amp; tạo hộp bao</button></div>
+    <label><span>Tự làm khi đổi phôi</span> <input type="checkbox" id="shAutoOn" checked></label>
+    <div class="info" id="shDraft"></div>
+    <div class="muted" style="margin-top:8px">Tự chỉnh các vách chia (góc tính theo độ, 0–360):</div>
+    <div id="angList"></div>
+    <div class="row">
+      <button id="angAdd">+ Thêm vách</button>
+      <select id="angEven" style="width:auto"><option value="">Chia đều...</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>8</option></select>
+    </div>
+    <label><span>Góc thoát tối thiểu (°)</span> <input type="number" id="shMinDraft" value="1" min="0" max="10" step="0.5"></label>
+    <label><span>Tô màu góc thoát trên phôi</span> <input type="checkbox" id="shShowDraft" checked></label>
+  </section>
+
+  <section>
+    <h2>3. Thông số hộp bao (mm)</h2>
+    <label>Độ dày thạch cao <input type="number" id="shWall" value="25" min="10" step="1"></label>
+    <label>Độ dày vỏ in <input type="number" id="shShell" value="2" min="1" step="0.2"></label>
+    <label>Độ dày vách chia <input type="number" id="shDiv" value="1.6" min="0.8" step="0.2"></label>
+    <label>Khe hở lắp ráp <input type="number" id="shGap" value="0.3" min="0" step="0.1"></label>
+    <label>Cao cuống rót <input type="number" id="shSpare" value="25" min="8" step="1"></label>
+    <label>Bán kính cuống rót <input type="number" id="shPour" value="16" min="3" step="1"></label>
+    <label>Thạch cao phủ trên chân phôi <input type="number" id="shBase" value="20" min="10" step="1"></label>
+    <label>Chấm định vị (bán kính, 0 = tắt) <input type="number" id="shKey" value="4" min="0" max="10" step="0.5"></label>
+    <button class="primary" id="shBuild">Tạo hộp bao</button>
+    <div id="shStatus" class="muted" style="margin-top:8px"></div>
+  </section>
+
+  <section>
+    <h2>4. Kết quả</h2>
+    <div class="info" id="shInfo"><span class="muted">Chưa tạo hộp bao.</span></div>
+    <label class="col" style="margin-top:10px">Bung hộp bao <input type="range" id="shExplode" min="0" max="100" value="0"></label>
+    <label><span>Hiện vỏ ngoài</span> <input type="checkbox" id="shShowPanel" checked></label>
+    <h2 style="margin-top:14px">Thạch cao &amp; nước</h2>
+    <label>Nước : thạch cao (%) <input type="number" id="shRatio" value="70" min="40" max="110" step="1"></label>
+    <label>Hao hụt (%) <input type="number" id="shWaste" value="10" min="0" max="50" step="1"></label>
+    <div class="info" id="shPlaster"></div>
+  </section>
+
+  <section>
+    <h2>5. Xuất file STL</h2>
+    <div class="muted">Mọi chi tiết đều đặt đúng tư thế in (đế nằm trên bàn in).</div>
+    <div class="row"><button id="shDlAll" disabled>Tải tất cả (zip)</button></div>
+    <div class="row" id="shDlParts"></div>
+    <div class="muted" id="shGuide"></div>
+  </section>
+</div>
 </aside>
 <div id="view"><div class="hint">Chuột trái: xoay · Chuột phải: dời · Lăn: phóng to</div></div>
 </div>

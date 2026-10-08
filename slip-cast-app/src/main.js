@@ -6,8 +6,10 @@ import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import {
   cleanGeometry, orientPhoi, phoiStats, countOpenEdges, prepareFaces,
   analyzeDraft, bestTheta, buildMold, buildCasing, plasterCalc,
+  analyzeDraftAngles, bestLayout,
 } from './mold.js';
 import { twistedVase } from './sample.js';
+import { buildShell, invertPhoi } from './shell.js';
 
 const $ = (id) => document.getElementById(id);
 const num = (id) => parseFloat($(id).value) || 0;
@@ -162,8 +164,9 @@ function rebuildPhoi(refit) {
     const p = phoi.attributes.position;
     for (let i = 0; i < p.count; i++) if (p.getY(i) > st.H * 0.95) re = Math.max(re, Math.hypot(p.getX(i), p.getZ(i)));
     $('pourR').value = Math.max(5, Math.round((re || st.rmax * 0.4) * 0.6));
+    $('shPour').value = $('pourR').value;
   }
-  updateDraft();
+  modeRefresh();
   if (refit) fitCamera(Math.max(st.rmax, st.H / 2), st.H / 2);
 }
 
@@ -203,8 +206,8 @@ function drawPhoi() {
 }
 
 function applyVisibility() {
-  if (phoiMesh) phoiMesh.visible = $('showPhoi').checked;
-  moldGroup.visible = $('showMold').checked;
+  if (phoiMesh) phoiMesh.visible = !shellMode && $('showPhoi').checked;
+  moldGroup.visible = !shellMode && $('showMold').checked;
   moldGroup.children.forEach((m) => {
     m.material.transparent = $('showPhoi').checked;
     m.material.opacity = $('showPhoi').checked ? 0.35 : 1;
@@ -358,6 +361,25 @@ async function download(mesh, name) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
+async function downloadMany(zipName, items) {
+  const files = items.map((it) => {
+    const dv = new STLExporter().parse(it.mesh, { binary: true });
+    return { name: it.name, data: new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength) };
+  });
+  const blob = makeZip(files);
+  let dl = null;
+  try { dl = window.claude && (await window.claude.use('downloads')); } catch (e) { dl = null; }
+  if (dl) {
+    try { await dl.save({ filename: zipName, data: blob }); status(`Đã lưu ${zipName}. Giải nén ra sẽ có ${files.length} file STL.`); }
+    catch (e) { if (e.code !== 'declined') status('Không lưu được file: ' + (e.message || e.code), true); }
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = zipName;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
 $('dlPhoi').addEventListener('click', () => phoi && download(new THREE.Mesh(phoi), 'phoi_da_bu_co_ngot.stl'));
 $('dlAll').addEventListener('click', () => {
   if (!mold) return;
@@ -383,9 +405,258 @@ $('showDraft').addEventListener('change', () => phoi && drawPhoi());
 $('explode').addEventListener('input', applyExplode);
 ['ratio', 'waste'].forEach((id) => $(id).addEventListener('input', showPlaster));
 
+
+// ================== MODULE HỘP BAO CHIA MẢNH ==================
+let shellMode = true;
+const shellGroup = new THREE.Group();
+scene.add(shellGroup);
+let shellAngles = [0, 120, 240];
+let shellFaces = null, shellDraft = null, shellRes = null, invMesh = null, shellBusy = false, shellTimer = null;
+const sh = (id) => num(id);
+const shStatus = (t, err) => { $('shStatus').textContent = t; $('shStatus').style.color = err ? 'var(--err)' : ''; };
+const PANEL_COLORS = [0xe3b04b, 0xd9893a, 0x8cc47a, 0xe6c86a, 0xcf7a5a, 0x9bb8d9, 0xd6a0c2, 0xa7c957];
+const DRAFT_COLORS = [[0.35, 0.72, 0.4], [0.95, 0.78, 0.2], [0.88, 0.2, 0.18]];
+
+function setMode(m) {
+  shellMode = m === 'shell';
+  $('modeShell').hidden = !shellMode;
+  $('modeBox').hidden = shellMode;
+  $('tabShell').classList.toggle('on', shellMode);
+  $('tabBox').classList.toggle('on', !shellMode);
+  shellGroup.visible = shellMode;
+  if (phoi) modeRefresh();
+  applyVisibility();
+}
+$('tabShell').addEventListener('click', () => setMode('shell'));
+$('tabBox').addEventListener('click', () => setMode('box'));
+
+function modeRefresh() {
+  if (!phoi) return;
+  if (shellMode) shellPhoiChanged();
+  else { updateDraft(); }
+}
+
+function clearShell() {
+  while (shellGroup.children.length) { const m = shellGroup.children.pop(); if (m.geometry) m.geometry.dispose(); }
+  shellRes = null; invMesh = null;
+  $('shInfo').innerHTML = '<span class="muted">Chưa tạo hộp bao. Chỉnh xong bấm “Tạo hộp bao”.</span>';
+  $('shDlAll').disabled = true; $('shDlParts').innerHTML = ''; $('shPlaster').innerHTML = ''; $('shGuide').textContent = '';
+}
+
+function renderAngles() {
+  const box = $('angList');
+  box.innerHTML = '';
+  shellAngles.forEach((a, i) => {
+    const row = document.createElement('div'); row.className = 'angrow';
+    const lab = document.createElement('span'); lab.textContent = `Vách ${i + 1}`;
+    const inp = document.createElement('input'); inp.type = 'number'; inp.step = '1'; inp.value = Math.round(a * 10) / 10;
+    inp.addEventListener('change', () => { shellAngles[i] = ((parseFloat(inp.value) || 0) % 360 + 360) % 360; shellAnglesChanged(); });
+    const del = document.createElement('button'); del.textContent = 'Xóa';
+    del.disabled = shellAngles.length <= 2;
+    del.addEventListener('click', () => { shellAngles.splice(i, 1); shellAnglesChanged(); });
+    row.append(lab, inp, del); box.appendChild(row);
+  });
+}
+
+function shellAnglesChanged() {
+  shellAngles.sort((a, b) => a - b);
+  clearShell();
+  renderAngles();
+  shellAnalyze();
+}
+
+$('angAdd').addEventListener('click', () => {
+  const s = [...shellAngles].sort((a, b) => a - b);
+  let best = 0, at = 0;
+  s.forEach((a, i) => { const e = i + 1 < s.length ? s[i + 1] : s[0] + 360; if (e - a > best) { best = e - a; at = a + (e - a) / 2; } });
+  shellAngles.push(Math.round((at % 360) * 10) / 10);
+  shellAnglesChanged();
+});
+$('angEven').addEventListener('change', () => {
+  const n = parseInt($('angEven').value);
+  if (n) { const t = shellAngles.length ? Math.min(...shellAngles) % (360 / n) : 0; shellAngles = Array.from({ length: n }, (_, i) => t + (i * 360) / n); shellAnglesChanged(); }
+  $('angEven').value = '';
+});
+
+// phân tích undercut trên phôi đã đảo
+function shellAnalyze() {
+  if (!phoi) return;
+  const inv = invertPhoi(phoi, sh('shSpare'));
+  shellFaces = prepareFaces(inv);
+  shellDraft = analyzeDraftAngles(shellFaces, shellAngles, sh('shMinDraft'));
+  const a = shellDraft.area, tot = a[0] + a[1] + a[2] || 1;
+  const pc = (i) => fmt((a[i] / tot) * 100, 1) + '%';
+  const spans = shellDraft.sectors.map((s) => fmt(s.span)).join('°, ') + '°';
+  let msg = `<span class="dot g"></span>Thoát tốt ${pc(0)} &nbsp; <span class="dot y"></span>Ít góc thoát ${pc(1)} &nbsp; <span class="dot r"></span>Undercut ${pc(2)}<br><span class="muted">${shellAngles.length} mảnh, độ rộng: ${spans}</span>`;
+  if (shellDraft.maxSpan > 180.01) msg += '<br><span class="warn">⚠ Có mảnh rộng hơn 180°, không tháo ra được. Thêm vách chia vào khoảng đó.</span>';
+  else if (a[2] / tot > 0.002) msg += '<br><span class="warn">⚠ Còn vùng undercut (màu đỏ): mảnh có thể kẹt khi tháo. Thử “Tự phân tích”, thêm vách hoặc dời vách khỏi vùng đỏ.</span>';
+  else msg += '<br><span class="ok">✓ Không có undercut theo hướng kéo của các mảnh.</span>';
+  $('shDraft').innerHTML = msg;
+  $('shBuild').disabled = shellDraft.maxSpan > 180.01 || shellBusy;
+  drawInverted(inv);
+}
+
+function drawInverted(inv) {
+  if (invMesh) { shellGroup.remove(invMesh); invMesh.geometry.dispose(); invMesh = null; }
+  if (shellRes) return; // đã có hộp bao: phôi hiển thị trong cụm bung
+  invMesh = makePositiveMesh(inv);
+  shellGroup.add(invMesh);
+  if (!shellRes) fitShell(phoiStats(phoi).rmax + sh('shWall'), (phoiStats(phoi).H + sh('shSpare')) / 2);
+}
+
+function makePositiveMesh(inv) {
+  const g = inv.toNonIndexed();
+  const col = new Float32Array(g.attributes.position.count * 3);
+  const neutral = [0.86, 0.8, 0.72], use = $('shShowDraft').checked && shellDraft;
+  for (let t = 0; t < g.attributes.position.count / 3; t++) {
+    const c = use ? DRAFT_COLORS[shellDraft.cls[t]] : neutral;
+    for (let v = 0; v < 3; v++) col.set(c, (3 * t + v) * 3);
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, flatShading: true }));
+  m.userData = { kind: 'phoi', mid: 0 };
+  return m;
+}
+
+function fitShell(r, cy) { fitCamera(r, cy); }
+
+function shellPhoiChanged() {
+  clearShell();
+  const st = phoiStats(phoi);
+  $('shSpare').value = $('shSpare').value || 25;
+  if ($('shAutoOn').checked) {
+    shStatus('Đang phân tích phôi...');
+    setTimeout(() => {
+      shellAnalyze0(); // dựng khung phân tích cho bestLayout
+      const b = bestLayout(shellFaces, sh('shMinDraft'));
+      shellAngles = b.angles.map((x) => Math.round(x * 10) / 10);
+      renderAngles();
+      shellAnalyze();
+      shellBuildNow();
+    }, 30);
+  } else {
+    shellAnalyze();
+    renderAngles();
+    shStatus('');
+  }
+  void st;
+}
+function shellAnalyze0() { shellFaces = prepareFaces(invertPhoi(phoi, sh('shSpare'))); }
+
+$('shAuto').addEventListener('click', () => {
+  if (!phoi) return shStatus('Hãy tải phôi trước.', true);
+  clearShell();
+  shStatus('Đang phân tích phôi...');
+  setTimeout(() => {
+    shellAnalyze0();
+    const b = bestLayout(shellFaces, sh('shMinDraft'));
+    shellAngles = b.angles.map((x) => Math.round(x * 10) / 10);
+    renderAngles(); shellAnalyze(); shellBuildNow();
+  }, 30);
+});
+$('shBuild').addEventListener('click', () => shellBuildNow());
+$('shShowDraft').addEventListener('change', () => { if (phoi && !shellRes) shellAnalyze(); });
+['shWall', 'shShell', 'shDiv', 'shGap', 'shSpare', 'shPour', 'shBase', 'shKey'].forEach((id) => $(id).addEventListener('change', () => { clearShell(); shellAnalyze(); }));
+$('shMinDraft').addEventListener('change', () => { clearShell(); shellAnalyze(); });
+
+function shellBuildNow() {
+  if (!phoi || shellBusy) return;
+  if (shellDraft && shellDraft.maxSpan > 180.01) return shStatus('Có mảnh rộng hơn 180°, hãy thêm vách chia.', true);
+  shellBusy = true; $('shBuild').disabled = true; $('shAuto').disabled = true;
+  const o = {
+    angles: [...shellAngles].sort((a, b) => a - b), wall: sh('shWall'), shell: sh('shShell'), divider: sh('shDiv'), gap: sh('shGap'),
+    spare: Math.max(8, sh('shSpare')), pourR: sh('shPour'), base: sh('shBase'), keyR: sh('shKey'), clear: sh('shGap'),
+  };
+  setTimeout(() => {
+    try {
+      const t0 = performance.now();
+      const r = buildShell(phoi, o, (m) => shStatus(m));
+      showShell(r, o);
+      shStatus(`Xong trong ${fmt((performance.now() - t0) / 1000, 1)} giây.`);
+    } catch (e) {
+      console.error(e);
+      shStatus('Tạo hộp bao lỗi: ' + e.message + '. Thường do lưới phôi không kín, quá nhiều mặt, hoặc thông số quá nhỏ.', true);
+    }
+    shellBusy = false; $('shBuild').disabled = false; $('shAuto').disabled = false;
+  }, 30);
+}
+
+const KIND_COLOR = { divider: 0xd0382c, base: 0x4fb6a0 };
+function showShell(r, o) {
+  while (shellGroup.children.length) { const m = shellGroup.children.pop(); if (m.geometry) m.geometry.dispose(); }
+  invMesh = null;
+  shellRes = { r, o };
+  let pi = 0;
+  r.parts.forEach((p) => {
+    if (p.kind === 'phoi') return;
+    const color = p.kind === 'panel' ? PANEL_COLORS[pi++ % PANEL_COLORS.length] : KIND_COLOR[p.kind];
+    const m = new THREE.Mesh(p.geometry, new THREE.MeshStandardMaterial({ color, roughness: 0.7, side: THREE.DoubleSide }));
+    m.userData = { kind: p.kind, mid: p.mid };
+    shellGroup.add(m);
+  });
+  const inv = invertPhoi(phoi, o.spare);
+  const pm = makePositiveMesh(inv);
+  shellGroup.add(pm);
+  const sp = new THREE.Mesh(new THREE.CylinderGeometry(o.pourR, o.pourR, o.spare, 48), new THREE.MeshStandardMaterial({ color: 0xcfc4b3, roughness: 0.8 }));
+  sp.position.y = o.spare / 2; sp.userData = { kind: 'phoi', mid: 0 };
+  shellGroup.add(sp);
+  applyShellView();
+  $('shExplode').value = 0;
+  fitShell(Math.max(r.dims.D / 2, r.dims.H / 2), r.dims.H / 2);
+
+  const nP = r.parts.filter((p) => p.kind === 'panel').length, nD = r.parts.filter((p) => p.kind === 'divider').length;
+  $('shInfo').innerHTML =
+    `<span class="sw" style="background:#4fb6a0"></span>1 đế · <span class="sw" style="background:#d0382c"></span>${nD} vách chia · <span class="sw" style="background:#e3b04b"></span>${nP} vỏ ngoài<br>` +
+    `Hộp bao Ø${fmt(r.dims.D)} × cao ${fmt(r.dims.H)} mm. Chia ${nD} mảnh thạch cao.`;
+  showShellPlaster();
+  $('shDlAll').disabled = false;
+  const box = $('shDlParts'); box.innerHTML = '';
+  r.parts.forEach((p) => {
+    const b = document.createElement('button'); b.textContent = p.label;
+    b.addEventListener('click', () => download(new THREE.Mesh(p.geometry), p.name + '.stl'));
+    box.appendChild(b);
+  });
+  $('shGuide').innerHTML = `Cách dùng: in cuống + phôi đảo ngược, đế, vách và vỏ. Đặt phôi lên đế, cắm các vách chia vào sát phôi, ghép vỏ ngoài vào giữa các vách và buộc dây thun. Trét kín mối nối bằng đất sét, rồi đổ thạch cao tới ${fmt(r.yTop)} mm. Chấm tròn trên vách tạo lỗ lõm trên thạch cao: đặt viên đất sét hoặc bi nhỏ vào làm chốt định vị khi ghép khuôn.`;
+}
+
+function showShellPlaster() {
+  if (!shellRes) return;
+  const c = plasterCalc(shellRes.r.plasterMm3, sh('shRatio') / 100, sh('shWaste'));
+  $('shPlaster').innerHTML =
+    `Thạch cao đặc: <b>${fmt(shellRes.r.plasterMm3 / 1e6, 2)} lít</b> · Hồ cần pha: <b>${fmt(c.slurryMl)} ml</b><br>` +
+    `Thạch cao: <b>${fmt(c.plasterG)} g</b> (${fmt(c.plasterG / 1000, 2)} kg) · Nước: <b>${fmt(c.waterMl)} ml</b><br>` +
+    `<span class="muted">Tỉ lệ ${fmt(sh('shRatio'))} nước : 100 thạch cao, hao hụt ${fmt(sh('shWaste'))}%. Ước tính, pha dư một chút theo kinh nghiệm xưởng.</span>`;
+}
+['shRatio', 'shWaste'].forEach((id) => $(id).addEventListener('input', showShellPlaster));
+
+function applyShellView() {
+  const hideP = !$('shShowPanel').checked;
+  shellGroup.children.forEach((m) => { if (m.userData.kind === 'panel') m.visible = !hideP; });
+}
+function applyShellExplode() {
+  if (!shellRes) return;
+  const d = (sh('shExplode') / 100) * shellRes.r.dims.D * 0.7;
+  shellGroup.children.forEach((m) => {
+    const k = m.userData.kind, mid = m.userData.mid || 0;
+    if (k === 'panel') m.position.set(Math.cos(mid) * d, 0, Math.sin(mid) * d);
+    else if (k === 'divider') m.position.set(Math.cos(mid) * d * 0.45, 0, Math.sin(mid) * d * 0.45);
+    else if (k === 'base') m.position.set(0, -d * 0.35, 0);
+    else if (k === 'phoi') m.position.set(0, d * 0.5, 0);
+  });
+}
+$('shShowPanel').addEventListener('change', applyShellView);
+$('shExplode').addEventListener('input', applyShellExplode);
+$('shDlAll').addEventListener('click', () => {
+  if (!shellRes) return;
+  const items = shellRes.r.parts.map((p) => ({ name: p.name + '.stl', mesh: new THREE.Mesh(p.geometry) }));
+  downloadMany('hop_bao_khuon.zip', items);
+});
+
 $('pick').addEventListener('click', () => $('file').click());
 
 window.__app = { THREE, scene, camera, controls, renderer };
 
 // Mở app là có sẵn phôi mẫu để thấy khu vực làm việc
+setMode('shell');
+renderAngles();
 $('demoTwist').click();
