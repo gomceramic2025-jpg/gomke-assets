@@ -199,18 +199,29 @@ export function buildShell(phoi, o, onProgress = () => {}) {
 
   const dividerBase = radialSolid(prof, wall + t, 0, yPanel);
   const invCBrush = toBrush(invC), sprueCBrush = toBrush(sprueC);
-  angles.slice().sort((a, b) => a - b).forEach((a, k, arr) => {
-    onProgress(`Vách chia ${k + 1}/${arr.length}...`);
-    let d = ex(slabSolid(a, td, Lbig, 0, yPanel), dividerBase, INTERSECTION);
+  // Vách chia: nếu mặt phẳng cắt trùng đúng mặt đối xứng của phôi, phép trừ có thể sinh số mặt khổng lồ.
+  // Khi đó thử lại với góc lệch rất nhỏ (< 0,2 độ), không ảnh hưởng thực tế.
+  const makeDivider = (a, nudge) => {
+    const ang = a + nudge;
+    let d = ex(slabSolid(ang, td + Math.abs(nudge) * 0.1, Lbig, 0, yPanel), dividerBase, INTERSECTION);
     d = ev.evaluate(toBrush(d.geometry), invCBrush, SUBTRACTION);
     d = ev.evaluate(toBrush(d.geometry), sprueCBrush, SUBTRACTION);
     if (keyR > 0) {
       for (const ks of keySpots) {
-        const rp = rAt(prof, ks.y, a * DEG) + wall * 0.5;
+        const rp = rAt(prof, ks.y, ang * DEG) + wall * 0.5;
         const sp = new THREE.SphereGeometry(keyR, 20, 14);
-        sp.translate(rp * Math.cos(a * DEG), ks.y, rp * Math.sin(a * DEG));
+        sp.translate(rp * Math.cos(ang * DEG), ks.y, rp * Math.sin(ang * DEG));
         d = ev.evaluate(toBrush(d.geometry), toBrush(sp), ADDITION);
       }
+    }
+    return d;
+  };
+  angles.slice().sort((a, b) => a - b).forEach((a, k, arr) => {
+    onProgress(`Vách chia ${k + 1}/${arr.length}...`);
+    let d = null;
+    for (const nudge of [0.07, -0.11, 0.19, 0]) {
+      d = makeDivider(a, nudge);
+      const g0 = d.geometry; if ((g0.index ? g0.index.count : g0.attributes.position.count) / 3 < 200000) break;
     }
     parts.push({ kind: 'divider', name: `vach_chia_${k + 1}`, label: `Vách ${k + 1}`, geometry: stripGeo(d.geometry), mid: a * DEG });
   });
