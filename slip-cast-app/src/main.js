@@ -10,7 +10,7 @@ import {
 } from './mold.js';
 import { twistedVase } from './sample.js';
 import { buildShell, invertPhoi } from './shell.js';
-import { colorDiff, otsu, makeMask, extractProfile, latheFromProfile, profileIoU, reliefFromImage } from './photo.js';
+import { colorDiff, otsu, makeMask, extractProfile, latheFromProfile, profileIoU, reliefFromImage, carveHull, hullGeometry, reliefMold, latheEmboss, grayMap } from './photo.js';
 
 const $ = (id) => document.getElementById(id);
 const num = (id) => parseFloat($(id).value) || 0;
@@ -666,32 +666,53 @@ $('shDlAll').addEventListener('click', () => {
 
 
 // ================== MODULE ẢNH → PHÔI ==================
-let im = null;          // { img: {data,width,height}, diff, auto, name }
-let imGeo = null, imKind = 'lathe', imBusy = null;
+let im = null;          // { img, diff, auto, name }  (ảnh đơn)
+let mv = null;          // { views: [{img, diff, name}], auto }   (nhiều ảnh)
+let emImg = null;       // ảnh hoa văn đã chuyển xám
+let imGeo = null, imKind = 'lathe', imBusy = null, imMold = null;
 const imCanvas = $('imCanvas');
 
-async function imLoad(file) {
-  try {
-    let bmp;
-    try { bmp = await createImageBitmap(file); } catch (e) {
-      bmp = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('Không đọc được ảnh')); i.src = URL.createObjectURL(file); });
-    }
-    const sc = Math.min(1, 1100 / Math.max(bmp.width, bmp.height));
-    const c = document.createElement('canvas'); c.width = Math.round(bmp.width * sc); c.height = Math.round(bmp.height * sc);
-    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-    imSet(c.getContext('2d').getImageData(0, 0, c.width, c.height), file.name);
-  } catch (e) { $('imInfo').innerHTML = `<span class="warn">Lỗi đọc ảnh: ${e.message}</span>`; }
+async function decodeImage(file, maxSide = 1100) {
+  let bmp;
+  try { bmp = await createImageBitmap(file); } catch (e) {
+    bmp = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('Không đọc được ảnh ' + file.name)); i.src = URL.createObjectURL(file); });
+  }
+  const sc = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * sc); c.height = Math.round(bmp.height * sc);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  return c.getContext('2d').getImageData(0, 0, c.width, c.height);
 }
+const setThr = (v) => { $('imThr').value = Math.min(140, Math.max(6, v)); };
 
+async function imLoad(file) {
+  try { imSet(await decodeImage(file), file.name); } catch (e) { $('imInfo').innerHTML = `<span class="warn">Lỗi đọc ảnh: ${e.message}</span>`; }
+}
 function imSet(img, name) {
   const diff = colorDiff(img);
   im = { img, diff, auto: otsu(diff), name };
-  $('imThr').value = Math.min(140, Math.max(6, im.auto));
+  setThr(im.auto);
   $('imName').textContent = `${name} · ${img.width}×${img.height} px`;
   imProcess();
 }
 
-// ảnh mẫu: bình chụp trên nền sáng, có bóng đổ nhẹ
+async function mvLoad(files) {
+  try {
+    const list = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).slice(0, 48);
+    if (list.length < 4) throw new Error('Cần ít nhất 4 ảnh quanh vật (nên 12 ảnh trở lên).');
+    $('imInfo').innerHTML = '<span class="muted">Đang đọc ảnh...</span>';
+    const views = [];
+    for (const f of list) { const img = await decodeImage(f, 700); views.push({ img, diff: colorDiff(img), name: f.name }); }
+    mvSet(views);
+  } catch (e) { $('imInfo').innerHTML = `<span class="warn">${e.message}</span>`; }
+}
+function mvSet(views) {
+  mv = { views, auto: otsu(views[0].diff) };
+  setThr(mv.auto);
+  $('imName').textContent = `${views.length} ảnh · góc cách đều ${fmt(360 / views.length, 1)}°`;
+  imProcess();
+}
+
+// ---- ảnh mẫu ----
 function sampleImage() {
   const W = 640, H = 960, c = document.createElement('canvas'); c.width = W; c.height = H;
   const x = c.getContext('2d');
@@ -710,12 +731,54 @@ function sampleImage() {
   return x.getImageData(0, 0, W, H);
 }
 
+// 12 góc của một chiếc bình có 3 thùy (không tròn xoay), để thử chế độ nhiều ảnh
+function sampleViews(n = 12) {
+  const W = 420, H = 640, ppm = 3.2, xc = 210, yb = 600, Hmm = 180, out = [];
+  const rb = (y) => 35 + 18 * Math.sin(Math.PI * Math.min(1, y / Hmm) * 1.1) - 10 * (y / Hmm) ** 2;
+  for (let v = 0; v < n; v++) {
+    const th = (2 * Math.PI * v) / n, c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d'); x.fillStyle = '#e9e9e5'; x.fillRect(0, 0, W, H);
+    const L = [], R = [];
+    for (let row = yb; row >= yb - Hmm * ppm; row -= 3) {
+      const y = (yb - row) / ppm; let lo = 1e9, hi = -1e9;
+      for (let a = 0; a < 360; a += 3) { const phi = (a * Math.PI) / 180, r = rb(y) * (1 + 0.14 * Math.cos(3 * phi + y / 60)), sx = r * Math.cos(phi - th); lo = Math.min(lo, sx); hi = Math.max(hi, sx); }
+      L.push([xc + lo * ppm, row]); R.push([xc + hi * ppm, row]);
+    }
+    const g = x.createLinearGradient(xc - 90, 0, xc + 90, 0); g.addColorStop(0, '#6b4a33'); g.addColorStop(0.4, '#c79566'); g.addColorStop(1, '#5a3d2a');
+    x.fillStyle = g; x.beginPath(); L.forEach(([px, py], i) => (i ? x.lineTo(px, py) : x.moveTo(px, py))); R.reverse().forEach(([px, py]) => x.lineTo(px, py)); x.closePath(); x.fill();
+    out.push({ img: x.getImageData(0, 0, W, H), name: `goc_${v * (360 / n)}`, });
+  }
+  return out.map((o) => ({ ...o, diff: colorDiff(o.img) }));
+}
+
+function drawContact(views, masks) {
+  const n = Math.min(views.length, 12), cols = Math.min(6, n), rows = Math.ceil(n / cols), tw = 180, th = Math.round(tw * (views[0].img.height / views[0].img.width));
+  imCanvas.width = cols * tw; imCanvas.height = rows * th;
+  const ctx = imCanvas.getContext('2d'), tmp = document.createElement('canvas');
+  for (let i = 0; i < n; i++) {
+    const v = views[i].img; tmp.width = v.width; tmp.height = v.height;
+    const tc = tmp.getContext('2d'), id = new ImageData(new Uint8ClampedArray(v.data), v.width, v.height);
+    if (masks) for (let p = 0; p < masks[i].length; p++) if (masks[i][p]) { id.data[p * 4] = id.data[p * 4] * 0.6 + 100; id.data[p * 4 + 1] *= 0.6; id.data[p * 4 + 2] *= 0.6; }
+    tc.putImageData(id, 0, 0);
+    ctx.drawImage(tmp, (i % cols) * tw, ((i / cols) | 0) * th, tw, th);
+  }
+}
+
+// ---- xử lý chính ----
 function imProcess() {
-  if (!im) return;
   imKind = $('imType').value;
   $('imLathe').hidden = imKind !== 'lathe';
+  $('imMulti').hidden = imKind !== 'multi';
   $('imRelief').hidden = imKind !== 'relief';
+  $('imSample').hidden = imKind === 'multi';
+  $('imPick').hidden = imKind === 'multi';
+  $('emBox').hidden = $('emKind').value === 'none';
+  $('emFlutes').hidden = $('emKind').value !== 'flutes';
+  $('emImage').hidden = $('emKind').value !== 'image';
   $('imThrVal').textContent = $('imThr').value;
+  imMold = null; $('rmDl').disabled = true; $('rmInfo').innerHTML = '';
+  if (imKind === 'multi') return mvProcess();
+  if (!im) return;
   const { img } = im, w = img.width, h = img.height;
   try {
     let geo, info = '';
@@ -725,29 +788,36 @@ function imProcess() {
     if (imKind === 'lathe') {
       const mask = makeMask(im.diff, w, h, num('imThr'));
       const prof = extractProfile(mask, w, h, { heightMm: num('imH'), side: $('imSide').value, smooth: num('imSmooth') });
-      geo = latheFromProfile(prof);
+      const kind = $('emKind').value;
+      const pat = { kind, count: num('emCount'), depth: num('emDepth'), twist: num('emTwist'), sharp: num('emSharp') / 10, y0: num('emY0') / 100, y1: Math.max(num('emY1'), num('emY0') + 5) / 100, taper: 0.08, img: emImg, repeat: num('emRepeat') };
+      if (kind === 'image' && !emImg) pat.kind = 'none';
+      geo = pat.kind === 'none' ? latheFromProfile(prof) : latheEmboss(prof, pat);
       const iou = profileIoU(mask, w, prof);
-      // vẽ đường viền mô hình lên ảnh gốc
       ctx.lineWidth = Math.max(2, w / 300); ctx.strokeStyle = '#e03a2e';
       ctx.beginPath(); prof.px.forEach((r, i) => { const px = prof.xc - r, py = prof.ys[i]; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }); ctx.stroke();
       ctx.beginPath(); prof.px.forEach((r, i) => { const px = prof.xc + r, py = prof.ys[i]; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }); ctx.stroke();
       ctx.setLineDash([10, 8]); ctx.strokeStyle = '#2a8cd6'; ctx.beginPath(); ctx.moveTo(prof.xc, prof.y0); ctx.lineTo(prof.xc, prof.y1); ctx.stroke(); ctx.setLineDash([]);
-      const maxR = Math.max(...prof.r);
-      info = `Đường đỏ là đường viền mô hình, vẽ đè lên ảnh. Độ khớp đường viền với ảnh: <b>${fmt(iou * 100, 2)}%</b><br>` +
-        `Cao ${fmt(num('imH'))} mm · rộng lớn nhất <b>${fmt(maxR * 2, 1)} mm</b> · ${fmt(prof.r.length)} điểm đường viền.<br>` +
-        (iou < 0.97 ? '<span class="warn">⚠ Độ khớp thấp: vật có thể không đối xứng, ảnh bị nghiêng, hoặc tách nền chưa đúng. Chỉnh “Độ nhạy tách nền” hoặc thử lấy một bên.</span>' : '<span class="ok">✓ Đường viền khớp ảnh.</span>');
+      const maxR = Math.max(...prof.r) + (pat.kind === 'none' ? 0 : Math.max(0, pat.depth));
+      info = `Đường đỏ là đường viền thân (chưa tính hoa văn), vẽ đè lên ảnh. Độ khớp đường viền với ảnh: <b>${fmt(iou * 100, 2)}%</b><br>` +
+        `Cao ${fmt(num('imH'))} mm · rộng lớn nhất khoảng <b>${fmt(maxR * 2, 1)} mm</b> · ${fmt(geo.index.count / 3)} mặt.<br>` +
+        (iou < 0.97 ? '<span class="warn">⚠ Độ khớp thấp: vật có thể không đối xứng, ảnh bị nghiêng, hoặc tách nền chưa đúng. Chỉnh “Độ nhạy tách nền”, thử lấy một bên, hoặc dùng chế độ nhiều ảnh.</span>' : '<span class="ok">✓ Đường viền khớp ảnh.</span>');
+      if (pat.kind !== 'none') info += '<br><span class="muted">Hoa văn nổi được thêm sau khi dựng thân tròn xoay.</span>';
       $('imNote').textContent = 'Độ khớp đo trên chính ảnh này (đường viền 2D). Phần khuất không có trong ảnh nên thân được coi là tròn xoay.';
     } else {
-      const r = reliefFromImage(img, { widthMm: num('imW'), depthMm: num('imDepth'), baseMm: num('imBase'), invert: !$('imBright').checked, gamma: 100 / num('imGamma'), blur: num('imBlur'), cut: $('imCut').checked, thr: num('imThr') || null, gridW: 160 });
+      const r = reliefFromImage(img, { widthMm: num('imW'), depthMm: num('imDepth'), baseMm: num('imBase'), invert: !$('imBright').checked, gamma: 100 / num('imGamma'), blur: num('imBlur'), cut: $('imCut').checked, thr: num('imThr') || null, gridW: 160, minDraft: num('imDraft'), fix: $('imFix').checked });
       geo = r.geometry;
       const hc = document.createElement('canvas'); hc.width = r.gw; hc.height = r.gh;
       const hx = hc.getContext('2d'), id = hx.createImageData(r.gw, r.gh);
-      for (let i = 0; i < r.hgt.length; i++) { const v = Math.round(r.hgt[i] * 255); id.data.set([v, v, v, 255], i * 4); }
+      const fl = r.draft1.flag;
+      for (let i = 0; i < r.hgt.length; i++) { const v = Math.round(r.hgt[i] * 255); id.data.set(fl[i] ? [230, 40, 30, 255] : [v, v, v, 255], i * 4); }
       hx.putImageData(id, 0, 0);
       imCanvas.width = w * 2 + 12; imCanvas.height = h; ctx.fillStyle = '#888'; ctx.fillRect(0, 0, imCanvas.width, h);
       ctx.putImageData(img, 0, 0); ctx.imageSmoothingEnabled = false; ctx.drawImage(hc, w + 12, 0, w, h);
       const bb = new THREE.Box3().setFromBufferAttribute(geo.attributes.position), sz = bb.getSize(new THREE.Vector3());
-      info = `Trái: ảnh gốc. Phải: bản đồ độ cao (sáng = nổi).<br>Phôi ${fmt(sz.x)} × ${fmt(sz.z)} mm, dày ${fmt(sz.y, 1)} mm · ${fmt(geo.index.count / 3)} mặt.`;
+      info = `Trái: ảnh gốc. Phải: bản đồ độ cao (sáng = nổi, đỏ = còn thiếu góc thoát).<br>Phôi ${fmt(sz.x)} × ${fmt(sz.z)} mm, dày ${fmt(sz.y, 1)} mm · ${fmt(geo.index.count / 3)} mặt.`;
+      const d0 = r.draft0, d1 = r.draft1;
+      $('imDraftInfo').innerHTML = `Trước khi sửa: <b>${fmt(d0.badFrac * 100, 1)}%</b> diện tích thiếu góc thoát (dốc nhất ${fmt(d0.minDraft, 1)}° so với phương kéo).` +
+        ($('imFix').checked ? `<br>Sau khi vát: <b>${fmt(d1.badFrac * 100, 1)}%</b>, ${d1.badFrac < 0.002 ? '<span class="ok">✓ tháo khuôn được theo phương thẳng đứng.</span>' : '<span class="warn">⚠ còn vùng dốc.</span>'}` : (d0.badFrac > 0.002 ? '<br><span class="warn">⚠ Nên bật “Tự sửa góc thoát” để khuôn không kẹt.</span>' : '<br><span class="ok">✓ Đủ góc thoát.</span>'));
       $('imNote').textContent = 'Độ cao suy ra từ độ sáng tối, không phải độ sâu thật. Hợp với tranh và phù điêu in đơn sắc; cần chỉnh tay chi tiết quan trọng.';
     }
     imGeo = geo;
@@ -757,33 +827,87 @@ function imProcess() {
   } catch (e) { imGeo = null; $('imInfo').innerHTML = `<span class="warn">${e.message}</span>`; $('imUse').disabled = true; $('imDl').disabled = true; }
 }
 
-function imShow(geo) {
+function mvProcess() {
+  if (!mv) { $('imInfo').innerHTML = '<span class="muted">Chọn nhiều ảnh quanh vật hoặc bấm “Ảnh mẫu 12 góc”.</span>'; return; }
+  $('imInfo').innerHTML = '<span class="muted">Đang dựng khối từ các ảnh...</span>';
+  $('imUse').disabled = true; $('imDl').disabled = true;
+  clearTimeout(imBusy);
+  imBusy = setTimeout(() => {
+    try {
+      const t0 = performance.now(), n = mv.views.length;
+      const masks = mv.views.map((v) => makeMask(v.diff, v.img.width, v.img.height, num('imThr')));
+      const views = mv.views.map((v, i) => ({ mask: masks[i], w: v.img.width, h: v.img.height, angleDeg: (360 * i) / n }));
+      const hull = carveHull(views, { heightMm: num('mvH'), res: parseInt($('mvRes').value), flip: $('mvFlip').checked });
+      const geo = hullGeometry(hull, { blur: 2, smooth: 6 });
+      drawContact(mv.views, masks);
+      const mean = hull.ious.reduce((a, b) => a + b, 0) / n, min = Math.min(...hull.ious);
+      imGeo = geo;
+      geo.computeBoundingBox();
+      const sz = geo.boundingBox.getSize(new THREE.Vector3());
+      $('imInfo').innerHTML = `Vùng đỏ trên ảnh là phần vật thể đã tách. Độ khớp của khối dựng với từng ảnh: trung bình <b>${fmt(mean * 100, 1)}%</b>, thấp nhất ${fmt(min * 100, 1)}%.<br>` +
+        `Khối ${fmt(sz.x)} × ${fmt(sz.z)} × ${fmt(sz.y)} mm · ${fmt(geo.index.count / 3)} mặt · ${fmt((performance.now() - t0) / 1000, 1)} giây.<br>` +
+        (min < 0.9 ? '<span class="warn">⚠ Có ảnh khớp thấp: kiểm tra thứ tự ảnh, góc xoay đều, vị trí vật trên tâm bàn xoay, hoặc “Độ nhạy tách nền”.</span>' : '<span class="ok">✓ Các ảnh khớp nhau.</span>');
+      $('imNote').textContent = 'Khối dựng là phần giao của các hình chiếu: đường viền rất chính xác, nhưng chỗ lõm sâu mà không có góc nào nhìn thẳng vào (đáy lõm, lỗ, hoa văn chìm) sẽ bị lấp đầy. Càng nhiều ảnh càng sát.';
+      $('imUse').disabled = false; $('imDl').disabled = false;
+      imShow(geo);
+    } catch (e) { imGeo = null; $('imInfo').innerHTML = `<span class="warn">${e.message}</span>`; }
+  }, 40);
+}
+
+function imShow(geo, color = 0xd9bfa0) {
   while (imGroup.children.length) { const m = imGroup.children.pop(); m.geometry.dispose(); }
   const g = geo.clone(); g.computeBoundingBox();
-  const bb = g.boundingBox;
-  g.translate(-(bb.min.x + bb.max.x) / 2, imKind === 'lathe' ? 0 : -bb.min.y, -(bb.min.z + bb.max.z) / 2);
+  const bb = g.boundingBox, flat = imKind === 'relief';
+  g.translate(-(bb.min.x + bb.max.x) / 2, flat ? -bb.min.y : (imKind === 'multi' ? -bb.min.y : 0), -(bb.min.z + bb.max.z) / 2);
   g.computeBoundingBox();
-  imGeoMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xd9bfa0, roughness: 0.85 }));
+  imGeoMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color, roughness: 0.85 }));
   imGroup.add(imGeoMesh);
   const sz = g.boundingBox.getSize(new THREE.Vector3());
   imFit = { r: Math.max(sz.x, sz.z, sz.y) * 0.6, cy: sz.y / 2 };
-  if (imMode0()) fitCamera(imFit.r, imFit.cy);
+  if (imgMode) fitCamera(imFit.r, imFit.cy);
 }
-const imMode0 = () => imgMode;
 
+// ---- khuôn phù điêu ----
+$('rmBuild').addEventListener('click', () => {
+  if (imKind !== 'relief' || !imGeo) return;
+  $('rmInfo').innerHTML = '<span class="muted">Đang tạo hộp đổ...</span>';
+  setTimeout(() => {
+    try {
+      imMold = reliefMold(imGeo, { margin: num('rmMargin'), plasterTop: num('rmTop'), wall: num('rmWall'), floor: num('rmFloor') });
+      imShow(imMold.geometry, 0x4fb6a0);
+      const c = plasterCalc(imMold.plasterMm3, num('rmRatio') / 100, num('rmWaste'));
+      $('rmInfo').innerHTML = `Hộp đổ ${fmt(imMold.size[0])} × ${fmt(imMold.size[2])} × ${fmt(imMold.size[1])} mm. Đặt sàn xuống bàn in, đổ thạch cao tới mép tường, tháo hộp ra là có khuôn lõm một mảnh.<br>` +
+        `Thạch cao đặc <b>${fmt(imMold.plasterMm3 / 1e6, 2)} lít</b> · pha <b>${fmt(c.plasterG)} g</b> thạch cao + <b>${fmt(c.waterMl)} ml</b> nước (đã tính hao hụt).`;
+      $('rmDl').disabled = false;
+    } catch (e) { $('rmInfo').innerHTML = `<span class="warn">Lỗi: ${e.message}</span>`; }
+  }, 30);
+});
+$('rmDl').addEventListener('click', () => imMold && download(new THREE.Mesh(imMold.geometry), 'hop_do_khuon_phu_dieu.stl'));
+
+// ---- sự kiện ----
 $('imPick').addEventListener('click', () => $('imFile').click());
 $('imFile').addEventListener('change', (e) => e.target.files[0] && imLoad(e.target.files[0]));
+$('mvPick').addEventListener('click', () => $('mvFile').click());
+$('mvFile').addEventListener('change', (e) => e.target.files.length && mvLoad(e.target.files));
 $('imSample').addEventListener('click', () => { imSet(sampleImage(), 'Ảnh mẫu (bình)'); });
-['imType', 'imH', 'imSide', 'imSmooth', 'imW', 'imDepth', 'imBase', 'imBright', 'imCut', 'imGamma', 'imBlur', 'imThr'].forEach((id) =>
-  $(id).addEventListener(id === 'imThr' || id === 'imSmooth' || id === 'imGamma' || id === 'imBlur' ? 'input' : 'change', () => {
-    clearTimeout(imBusy); imBusy = setTimeout(() => { if (id === 'imType' && im) { $('imThr').value = Math.min(140, Math.max(6, im.auto)); } imProcess(); }, 120);
-  }));
-$('imDl').addEventListener('click', () => imGeo && download(new THREE.Mesh(imGeo), imKind === 'lathe' ? 'phoi_tron_xoay_tu_anh.stl' : 'phu_dieu_tu_anh.stl'));
+$('mvSample').addEventListener('click', () => { $('imType').value = 'multi'; mvSet(sampleViews(12)); });
+$('emPick').addEventListener('click', () => $('emFile').click());
+$('emFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  try { const raw = await decodeImage(f, 512); emImg = grayMap(raw, { invert: !$('emBright').checked }); $('emName').textContent = f.name; imProcess(); } catch (err) { $('emName').textContent = err.message; }
+});
+$('emBright').addEventListener('change', () => { $('emName').textContent = 'Hãy chọn lại ảnh hoa văn để áp dụng.'; });
+const imInputs = ['imType', 'imH', 'imSide', 'imSmooth', 'imW', 'imDepth', 'imBase', 'imBright', 'imCut', 'imGamma', 'imBlur', 'imThr', 'imDraft', 'imFix', 'mvH', 'mvRes', 'mvFlip', 'emKind', 'emCount', 'emDepth', 'emTwist', 'emSharp', 'emY0', 'emY1', 'emRepeat'];
+imInputs.forEach((id) => $(id).addEventListener(['imThr', 'imSmooth', 'imGamma', 'imBlur', 'emSharp'].includes(id) ? 'input' : 'change', () => {
+  clearTimeout(imBusy);
+  imBusy = setTimeout(() => { if (id === 'imType') { const src = $('imType').value === 'multi' ? mv : im; if (src) setThr(src.auto); } imProcess(); }, 150);
+}));
+$('imDl').addEventListener('click', () => imGeo && download(new THREE.Mesh(imGeo), imKind === 'multi' ? 'phoi_tu_nhieu_anh.stl' : imKind === 'lathe' ? 'phoi_tron_xoay_tu_anh.stl' : 'phu_dieu_tu_anh.stl'));
 $('imUse').addEventListener('click', () => {
-  if (!imGeo || imKind !== 'lathe') return;
+  if (!imGeo || imKind === 'relief') return;
   $('unit').value = '1';
   setMode('shell');
-  setBase(imGeo, 'Phôi từ ảnh: ' + (im ? im.name : ''));
+  setBase(imGeo, 'Phôi từ ảnh');
 });
 
 $('pick').addEventListener('click', () => $('file').click());

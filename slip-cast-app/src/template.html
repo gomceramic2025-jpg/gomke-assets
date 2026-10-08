@@ -87,10 +87,22 @@
     <div class="muted">Dựng bằng thuật toán, không đoán mò: tròn xoay lấy đường viền thật từ ảnh; phù điêu lấy độ cao từ độ sáng tối. Chụp thẳng, nền trơn, đứng xa và zoom để ít méo.</div>
     <div class="row"><button id="imPick">Chọn ảnh</button><button id="imSample">Ảnh mẫu</button><input type="file" id="imFile" accept="image/*" style="display:none"></div>
     <label>Loại sản phẩm
-      <select id="imType" style="width:auto"><option value="lathe">Tròn xoay (bình, cốc, hũ)</option><option value="relief">Phù điêu (tranh gốm)</option></select>
+      <select id="imType" style="width:auto"><option value="lathe">Tròn xoay, từ 1 ảnh</option><option value="multi">Nhiều ảnh quanh vật (chính xác cao)</option><option value="relief">Phù điêu (tranh gốm)</option></select>
     </label>
     <canvas id="imCanvas" width="10" height="10" style="width:100%;max-height:340px;object-fit:contain;border:1px solid var(--line);border-radius:8px;margin-top:6px;background:var(--bg)"></canvas>
     <div class="muted" id="imName">Chưa có ảnh.</div>
+  </section>
+
+  <section id="imMulti" hidden>
+    <h2>Nhiều ảnh quanh vật</h2>
+    <div class="muted">Đặt vật lên bàn xoay, cố định máy ảnh, nền trơn. Chụp mỗi lần xoay đều một góc (ví dụ 12 ảnh cách 30°, 24 ảnh cách 15°), ảnh đầu tiên là góc 0°. Đặt tên ảnh theo thứ tự chụp.</div>
+    <div class="row"><button id="mvPick">Chọn nhiều ảnh</button><button id="mvSample">Ảnh mẫu 12 góc</button><input type="file" id="mvFile" accept="image/*" multiple style="display:none"></div>
+    <label>Chiều cao thật sau nung (mm) <input type="number" id="mvH" value="180" min="10" step="1"></label>
+    <label>Độ chi tiết
+      <select id="mvRes" style="width:auto"><option value="96">Nhanh</option><option value="128" selected>Vừa</option><option value="160">Cao</option></select>
+    </label>
+    <label>Đảo chiều xoay <input type="checkbox" id="mvFlip"></label>
+    <div class="muted">Nếu mô hình ra bị soi gương so với vật thật thì bật “Đảo chiều xoay”.</div>
   </section>
 
   <section id="imLathe">
@@ -101,7 +113,27 @@
       <select id="imSide" style="width:auto"><option value="both">Hai bên (trung bình)</option><option value="left">Bên trái</option><option value="right">Bên phải</option></select>
     </label>
     <label class="col">Làm mượt đường viền <input type="range" id="imSmooth" min="0" max="15" value="5"></label>
-  </section>
+      <h2 style="margin-top:14px">Hoa văn nổi</h2>
+    <label>Kiểu
+      <select id="emKind" style="width:auto"><option value="none">Không</option><option value="flutes">Cánh / rãnh dọc, xoắn</option><option value="image">Hoa văn từ ảnh</option></select>
+    </label>
+    <div id="emBox" hidden>
+      <label>Độ nổi (mm, âm = lõm) <input type="number" id="emDepth" value="4" step="0.5"></label>
+      <label>Từ độ cao (%) <input type="number" id="emY0" value="10" min="0" max="95" step="1"></label>
+      <label>Đến độ cao (%) <input type="number" id="emY1" value="85" min="5" max="100" step="1"></label>
+      <div id="emFlutes">
+        <label>Số cánh <input type="number" id="emCount" value="8" min="1" max="60" step="1"></label>
+        <label>Độ xoắn (vòng) <input type="number" id="emTwist" value="0.5" step="0.1"></label>
+        <label class="col">Độ nhọn của cánh <input type="range" id="emSharp" min="5" max="40" value="15"></label>
+      </div>
+      <div id="emImage" hidden>
+        <div class="row"><button id="emPick">Chọn ảnh hoa văn</button><input type="file" id="emFile" accept="image/*" style="display:none"></div>
+        <label>Lặp quanh thân (lần) <input type="number" id="emRepeat" value="4" min="1" max="40" step="1"></label>
+        <label>Vùng sáng nổi lên <input type="checkbox" id="emBright" checked></label>
+        <div class="muted" id="emName">Chưa chọn ảnh hoa văn.</div>
+      </div>
+    </div>
+</section>
 
   <section id="imRelief" hidden>
     <h2>Thông số phù điêu</h2>
@@ -112,7 +144,20 @@
     <label>Cắt bỏ nền ảnh <input type="checkbox" id="imCut" checked></label>
     <label class="col">Độ tương phản <input type="range" id="imGamma" min="30" max="250" value="100"></label>
     <label class="col">Làm mượt <input type="range" id="imBlur" min="0" max="4" value="1"></label>
-  </section>
+      <label>Góc thoát tối thiểu (°) <input type="number" id="imDraft" value="5" min="1" max="20" step="0.5"></label>
+    <label>Tự sửa góc thoát (làm dốc vát) <input type="checkbox" id="imFix" checked></label>
+    <div class="info" id="imDraftInfo"></div>
+    <h2 style="margin-top:14px">Hộp đổ khuôn một mảnh</h2>
+    <label>Lề thạch cao quanh phôi (mm) <input type="number" id="rmMargin" value="20" min="8" step="1"></label>
+    <label>Thạch cao phủ trên đỉnh (mm) <input type="number" id="rmTop" value="20" min="10" step="1"></label>
+    <label>Dày tường in (mm) <input type="number" id="rmWall" value="2" min="1" step="0.2"></label>
+    <label>Dày sàn in (mm) <input type="number" id="rmFloor" value="4" min="2" step="0.5"></label>
+    <div class="row"><button class="primary" id="rmBuild">Tạo hộp đổ khuôn</button></div>
+    <label>Nước : thạch cao (%) <input type="number" id="rmRatio" value="70" min="40" max="110" step="1"></label>
+    <label>Hao hụt (%) <input type="number" id="rmWaste" value="10" min="0" max="50" step="1"></label>
+    <div class="info" id="rmInfo"></div>
+    <div class="row"><button id="rmDl" disabled>Tải STL hộp đổ</button></div>
+</section>
 
   <section>
     <h2>Kết quả</h2>
