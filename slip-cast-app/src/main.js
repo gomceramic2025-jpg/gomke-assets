@@ -52,7 +52,7 @@ function resize() {
 }
 new ResizeObserver(resize).observe(view);
 resize();
-(function loop() { controls.update(); if (renderer) renderer.render(scene, camera); requestAnimationFrame(loop); })();
+(function loop() { controls.update(); grid.visible = camera.position.y > -1; if (renderer) renderer.render(scene, camera); requestAnimationFrame(loop); })();
 
 function fitCamera(r, cy) {
   controls.target.set(0, cy, 0);
@@ -128,7 +128,7 @@ function cancelActive() {
   a.reject(err);
 }
 
-function runTask(type, payload, text) {
+function runTask(type, payload, text, transfer) {
   cancelActive();
   const id = ++taskSeq;
   return new Promise((resolve, reject) => {
@@ -136,7 +136,7 @@ function runTask(type, payload, text) {
     active = a;
     showBusy(true, text);
     const w = getWorker();
-    if (w) w.postMessage({ id, type, payload });
+    if (w) w.postMessage({ id, type, payload }, transfer || []);
     else setTimeout(() => runDirect(a), 30); // chừa thời gian cho trình duyệt vẽ thanh tiến trình
   });
 }
@@ -185,20 +185,22 @@ function setBase(geo, name) {
 async function setBaseFromFile(geo, name) {
   const pc = geo.attributes && geo.attributes.position ? geo.attributes.position.count : 0;
   if (pc < 12) throw new Error('file không có mặt tam giác nào (rỗng hoặc sai định dạng)');
-  if (pc / 3 > 1200000) throw new Error('mô hình quá nặng (' + Math.round(pc / 3000) + ' nghìn mặt). Hãy giảm mặt (Decimate) rồi tải lại');
-  const raw = { pos: Float32Array.from(geo.attributes.position.array) };
-  const r = await runTask('prepare', { geo: raw, autoRepair: $('autoRepair').checked, res: 120 }, 'Đang đọc và làm sạch lưới...');
+  if (pc / 3 > 6000000) throw new Error('mô hình có ' + (pc / 3000000).toFixed(1) + ' triệu mặt, vượt quá khả năng của trình duyệt (tối đa 6 triệu). Hãy giảm mặt bằng phần mềm 3D rồi tải lại');
+  const res = parseInt($('detail').value) || 120;
+  const raw = geo.attributes.position.array; // chuyển thẳng sang worker, không sao chép (file nặng rất tốn bộ nhớ)
+  const r = await runTask('prepare', { geo: { pos: raw }, autoRepair: $('autoRepair').checked, res }, 'Đang đọc và làm sạch lưới...', [raw.buffer]);
   const g = unpack(r.geo);
   const tris = g.index ? g.index.count / 3 : 0;
   if (tris < 4) throw new Error('mô hình không có đủ mặt để dựng khối');
-  if (tris > 400000) throw new Error('mô hình có ' + Math.round(tris / 1000) + ' nghìn mặt, quá nặng. Hãy giảm mặt (Decimate) về dưới 150 nghìn rồi tải lại');
-  const i = r.info;
-  repairNote = i.repaired
-    ? `Đã tự vá lưới hở: ${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}. Độ phân giải vá khoảng ${fmt(i.voxel, 1)} mm, chi tiết nhỏ hơn mức này bị làm mượt.`
-    : '';
+  const i = r.info, k = (n) => fmt(Math.round(n / 1000)) + ' nghìn';
+  const notes = [];
+  if (i.decimated) notes.push(`Mô hình ${k(i.trisBefore)} mặt quá nặng nên đã được giảm xuống còn ${k(i.trisAfter)} mặt.`);
+  if (i.repaired && i.openBefore > 0) notes.push(`Đã tự vá lưới hở: ${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}.`);
+  if (i.voxel) notes.push(`Độ phân giải khoảng ${fmt(i.voxel, 1)} mm, chi tiết nhỏ hơn mức này bị làm mượt (chọn “Chi tiết” hoặc “Rất chi tiết” nếu cần giữ nhiều hơn).`);
+  repairNote = notes.join(' ');
   g.computeVertexNormals();
   commitBase(g, name);
-  if (i.repaired) toast(repairNote, i.openAfter > 0);
+  if (notes.length) toast(repairNote, i.openAfter > 0);
 }
 
 function loadFile(file) {
@@ -289,7 +291,7 @@ function rebuildPhoi(refit) {
     `Sản phẩm sau nung: ${fmt(fs[0])} × ${fmt(fs[2])} × ${fmt(fs[1])} mm<br>` +
     `Thể tích phôi: ${fmt(st.volume / 1000, 1)} cm³ · ${fmt(st.tris)} mặt` +
     (open ? `<br><span class="warn">⚠ Lưới phôi hở/không kín (${open} cạnh). Bật “Tự vá lưới hở” rồi tải lại file, hoặc sửa trong Blender/Meshmixer (Make Manifold).</span>` : '<br><span class="ok">✓ Lưới kín, dùng được.</span>' + (repairNote ? `<br><span class="muted">${repairNote}</span>` : '')) +
-    (st.tris > 150000 ? '<br><span class="warn">⚠ Quá nhiều mặt, tạo khuôn sẽ chậm. Nên giảm mặt (Decimate) về dưới 100k.</span>' : '');
+    (st.tris > 150000 ? '<br><span class="warn">⚠ Nhiều mặt, tạo khuôn sẽ chậm. Tải lại file để app tự giảm mặt, hoặc chọn độ chi tiết thấp hơn.</span>' : '');
   if (!pourManual) {
     let re = 0;
     const p = phoi.attributes.position;

@@ -27,18 +27,31 @@ const bufs = (list) => { const s = new Set(); for (const o of list) for (const k
 let lastMold = null; // giữ lại để tạo hộp đổ sau đó (cần hình học gốc của từng mảnh)
 
 export const handlers = {
-  // Làm sạch lưới (hàn đỉnh, bỏ mặt suy biến) và tự vá nếu lưới hở.
-  prepare({ geo, autoRepair, res }, progress) {
-    progress('Đang làm sạch lưới...');
+  // Làm sạch lưới, tự vá nếu lưới hở, tự giảm mặt nếu quá nặng.
+  // Cả hai việc đều dùng cách dựng lại bề mặt qua khối voxel (kín, gọn), nên file hàng triệu mặt vẫn xử lý được.
+  prepare({ geo, autoRepair, res, heavy = 150000 }, progress) {
     const raw = unpack(geo);
-    let g = cleanGeometry(raw);
-    const openBefore = countOpenEdges(g);
-    let info = { openBefore, repaired: false, openAfter: openBefore, voxel: 0 };
-    if (openBefore > 0 && autoRepair) {
-      const r = repairMesh(g, { res, onProgress: progress });
+    const trisRaw = raw.attributes.position.count / 3;
+    let g, info;
+    if (trisRaw > 300000) {
+      // Quá nặng để hàn đỉnh (tốn bộ nhớ): dựng lại thẳng từ các mặt gốc
+      progress(`Đọc ${Math.round(trisRaw / 1000)} nghìn mặt, đang giảm mặt...`);
+      const r = repairMesh(raw, { res, onProgress: progress });
       g = r.geometry;
-      info = { openBefore, repaired: true, openAfter: countOpenEdges(g), voxel: r.voxel };
+      info = { openBefore: -1, repaired: true, decimated: true, trisBefore: trisRaw, voxel: r.voxel };
+    } else {
+      progress('Đang làm sạch lưới...');
+      g = cleanGeometry(raw);
+      const openBefore = countOpenEdges(g), tris = g.index.count / 3;
+      info = { openBefore, repaired: false, decimated: false, trisBefore: trisRaw, voxel: 0 };
+      if (tris > heavy || (openBefore > 0 && autoRepair)) {
+        const r = repairMesh(g, { res, onProgress: progress });
+        g = r.geometry;
+        info.repaired = openBefore > 0; info.decimated = tris > heavy; info.voxel = r.voxel;
+      }
     }
+    info.openAfter = countOpenEdges(g);
+    info.trisAfter = g.index.count / 3;
     const out = pack(g);
     return { result: { geo: out, info }, transfer: bufs([out]) };
   },
