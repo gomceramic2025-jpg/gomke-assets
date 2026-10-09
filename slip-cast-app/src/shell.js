@@ -154,6 +154,17 @@ function slabSolid(a, td, L, y0, y1) {
 
 export function buildShell(phoi, o, onProgress = () => {}) {
   const { angles, wall, shell: t, divider: td, gap, spare, pourR, base, keyR, clear } = o;
+  // Kiểm tra đầu vào: giá trị vô lý làm CSG ra kết quả sai hoặc sập
+  if (!(wall >= 8)) throw new Error('Độ dày thạch cao phải từ 8 mm trở lên');
+  if (!(t >= 0.8)) throw new Error('Độ dày vỏ in phải từ 0,8 mm trở lên');
+  if (!(td >= 0.6)) throw new Error('Độ dày vách chia phải từ 0,6 mm trở lên');
+  if (!(spare >= 5)) throw new Error('Cao cuống rót phải từ 5 mm trở lên');
+  if (!(pourR >= 2)) throw new Error('Bán kính cuống rót phải từ 2 mm trở lên');
+  if (!(base >= 5)) throw new Error('Lớp thạch cao phủ trên chân phôi phải từ 5 mm trở lên');
+  if (!(angles && angles.length >= 2)) throw new Error('Cần ít nhất 2 vách chia');
+  const secs = sectorsFromAngles(angles);
+  if (secs.some((x) => x.span < 3)) throw new Error('Hai vách chia trùng góc hoặc quá sát nhau (dưới 3°)');
+  if (secs.some((x) => x.span > 180.01)) throw new Error('Có mảnh rộng hơn 180°, không tháo ra được');
   const st = phoiStats(phoi);
   const H = st.H;
   const yTop = spare + H + base, yPanel = yTop + 4;

@@ -38,6 +38,8 @@
   .dot.g { background: #59b866; } .dot.y { background: #f2c733; } .dot.r { background: #e13a2e; }
   .info { font-size: 13px; margin-top: 8px; }
   #file { display: none; }
+  #toast { position: fixed; left: 16px; right: 16px; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); z-index: 50; max-width: 560px; margin: 0 auto; padding: 11px 14px; border-radius: 10px; background: var(--ink); color: var(--bg); font-size: 13.5px; box-shadow: 0 6px 24px rgba(0,0,0,.28); }
+  #toast.err { background: var(--err); color: #fff; }
   .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
   .tabs button { flex: 1; padding: 9px 6px; font-weight: 600; }
   .tabs button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
@@ -54,6 +56,7 @@
   }
 </style>
 <header><h1>Gốm Kể · Tạo khuôn đổ rót</h1><span>Từ phôi 3D → khuôn thạch cao nhiều mảnh</span></header>
+<div id="toast" hidden role="status"></div>
 <div class="app">
 <aside>
   <div class="tabs"><button id="tabShell" class="on">Hộp bao</button><button id="tabBox">Khuôn 2 mảnh</button></div>
