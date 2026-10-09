@@ -1,0 +1,15 @@
+import { chromium } from '/opt/node-tools/node_modules/playwright/index.mjs';
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader','--no-sandbox'] });
+const p = await b.newPage({ viewport: { width: 1280, height: 800 } }); const errs = []; p.on('pageerror', e => errs.push(e.message));
+await p.goto('file://' + process.cwd() + '/artifact.html');
+await p.waitForFunction(() => document.getElementById('busy').hidden && /Xong/.test(document.getElementById('shStatus').textContent), null, { timeout: 120000 });
+await p.click('#tabBox'); await p.click('#build');
+await p.waitForFunction(() => /Xong|lỗi/.test(document.getElementById('status').textContent) && document.getElementById('busy').hidden, null, { timeout: 120000 });
+console.log('khuôn 2 mảnh hộp:', await p.textContent('#status'), '|', (await p.innerText('#moldInfo')).replace(/\n/g, ' | '));
+await p.evaluate(() => { window.claude = { use: async (n) => n === 'downloads' ? { save: async ({ filename, data }) => { window.__z = { filename, size: data.size }; return { status: 'saved' }; } } : null }; });
+await p.click('#dlCasings button'); await p.waitForTimeout(15000); console.log('status:', await p.textContent('#status'), '| toast:', await p.textContent('#toast'), '| busy hidden:', await p.evaluate(() => document.getElementById('busy').hidden), '| z:', await p.evaluate(() => JSON.stringify(window.__z)));
+console.log('hộp đổ mảnh 1 -> tải:', JSON.stringify(await p.evaluate(() => window.__z)), '|', await p.textContent('#status'));
+await p.selectOption('#n', '3'); await p.click('#build');
+await p.waitForFunction(() => /Xong|lỗi/.test(document.getElementById('status').textContent) && document.getElementById('busy').hidden, null, { timeout: 120000 });
+console.log('khuôn tròn 3 mảnh:', await p.textContent('#status'), '|', (await p.innerText('#moldInfo')).split('\n')[0]);
+console.log('errors', errs); await b.close();

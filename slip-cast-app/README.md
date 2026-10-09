@@ -12,3 +12,8 @@ Sửa code: `npm install` rồi `node build.mjs` để đóng gói lại `index.
 - `audit_node.mjs`, `audit_perf.mjs`: thử logic khuôn/hộp bao với trường hợp biên và phôi nhiều mặt.
 - `audit_ui.mjs`, `audit_ui2.mjs`, `audit_ui3.mjs`: thử giao diện bằng Chromium (file lỗi, giá trị sai, đổi nhanh, điện thoại, đổi tab).
 - `ui7.mjs`, `ui10.mjs`: thử luồng đầy đủ với bình xoắn và tượng gấu.
+- `repair.mjs`, `make_broken.mjs`, `worker_ui.mjs`, `box_worker.mjs`: thử tự vá lưới hở, luồng nền (Worker), nút Hủy, đổi phôi giữa chừng, chế độ dự phòng khi không có Worker.
+
+## Cấu trúc mã
+- `src/mold.js` khuôn 2 mảnh / khuôn tròn, phân tích góc thoát. `src/shell.js` hộp bao. `src/repair.js` vá lưới hở.
+- `src/tasks.js` các việc nặng; `src/worker.js` chạy chúng trong Web Worker; nếu không tạo được Worker thì `main.js` chạy trực tiếp.

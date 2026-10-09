@@ -38,6 +38,13 @@
   .dot.g { background: #59b866; } .dot.y { background: #f2c733; } .dot.r { background: #e13a2e; }
   .info { font-size: 13px; margin-top: 8px; }
   #file { display: none; }
+  #busy { position: fixed; left: 16px; right: 16px; bottom: calc(66px + env(safe-area-inset-bottom, 0px)); z-index: 49; max-width: 560px; margin: 0 auto; padding: 10px 14px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(0,0,0,.2); display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+  #busy[hidden] { display: none; }
+  #busyText { flex: 1; min-width: 0; }
+  #busy .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; overflow: hidden; border-radius: 0 0 10px 10px; }
+  #busy .bar::after { content: ""; display: block; width: 35%; height: 100%; background: var(--accent); animation: slide 1.1s ease-in-out infinite; }
+  @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+  @media (prefers-reduced-motion: reduce) { #busy .bar::after { animation: none; width: 100%; opacity: .5; } }
   #toast { position: fixed; left: 16px; right: 16px; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); z-index: 50; max-width: 560px; margin: 0 auto; padding: 11px 14px; border-radius: 10px; background: var(--ink); color: var(--bg); font-size: 13.5px; box-shadow: 0 6px 24px rgba(0,0,0,.28); }
   #toast.err { background: var(--err); color: #fff; }
   .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
@@ -56,6 +63,7 @@
   }
 </style>
 <header><h1>Gốm Kể · Tạo khuôn đổ rót</h1><span>Từ phôi 3D → khuôn thạch cao nhiều mảnh</span></header>
+<div id="busy" hidden role="status"><span id="busyText"></span><button id="busyCancel">Hủy</button><span class="bar"></span></div>
 <div id="toast" hidden role="status"></div>
 <div class="app">
 <aside>
@@ -70,6 +78,7 @@
     </div>
     <div class="row"><button id="dlSample">Tải file STL mẫu về máy</button></div>
     <div class="muted" id="fileName">Chưa có phôi. Có thể kéo thả file vào khung 3D.</div>
+    <label><span>Tự vá lưới hở khi tải file</span> <input type="checkbox" id="autoRepair" checked></label>
     <label>Đơn vị file
       <select id="unit"><option value="1">mm</option><option value="10">cm</option><option value="1000">m</option><option value="25.4">inch</option></select>
     </label>

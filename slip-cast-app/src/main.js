@@ -5,11 +5,12 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import {
   cleanGeometry, orientPhoi, phoiStats, countOpenEdges, prepareFaces,
-  analyzeDraft, bestTheta, buildMold, buildCasing, plasterCalc,
-  analyzeDraftAngles, bestLayout,
+  analyzeDraft, bestTheta, plasterCalc,
+  analyzeDraftAngles,
 } from './mold.js';
 import { twistedVase } from './sample.js';
-import { buildShell, invertPhoi } from './shell.js';
+import { invertPhoi } from './shell.js';
+import { handlers, pack, unpack } from './tasks.js';
 
 const $ = (id) => document.getElementById(id);
 const num = (id) => parseFloat($(id).value) || 0;
@@ -69,6 +70,79 @@ let phoiMesh = null;
 const moldGroup = new THREE.Group();
 scene.add(moldGroup);
 let pourManual = false;
+
+// ---------- Việc tính toán nặng: chạy trong Web Worker để trang không bị đứng ----------
+let worker = null, workerBroken = false, taskSeq = 0, active = null;
+const BUSY_BTNS = ['build', 'shBuild', 'shAuto', 'rmBuild'];
+
+function showBusy(on, text) {
+  const el = $('busy');
+  if (el) { el.hidden = !on; if (on) $('busyText').textContent = text || 'Đang xử lý...'; }
+  BUSY_BTNS.forEach((id) => { const b = $(id); if (b) b.disabled = on || (id === 'shBuild' && shBlocked); });
+}
+const setBusyText = (t) => { const e = $('busyText'); if (e) e.textContent = t; };
+
+function finishTask(id, ok, val) {
+  if (!active || active.id !== id) return; // việc đã bị hủy hoặc thay thế
+  const a = active; active = null;
+  showBusy(false);
+  if (ok) a.resolve(val); else a.reject(val instanceof Error ? val : new Error(String(val)));
+}
+
+function getWorker() {
+  if (worker) return worker;
+  if (workerBroken || typeof Worker === 'undefined' || typeof __WORKER_SRC__ === 'undefined') return null;
+  try {
+    worker = new Worker(URL.createObjectURL(new Blob([__WORKER_SRC__], { type: 'text/javascript' })));
+    worker.onmessage = (ev) => {
+      const m = ev.data;
+      if (!active || m.id !== active.id) return;
+      if (m.kind === 'progress') setBusyText(m.text);
+      else if (m.kind === 'done') finishTask(m.id, true, m.result);
+      else finishTask(m.id, false, new Error(m.message));
+    };
+    worker.onerror = () => {
+      // Worker không chạy được (bị chặn hoặc lỗi nạp): chuyển sang chạy trực tiếp
+      workerBroken = true; try { worker.terminate(); } catch (e) { /* bỏ qua */ }
+      worker = null;
+      if (active) { const a = active; setTimeout(() => runDirect(a), 30); }
+    };
+    return worker;
+  } catch (e) { workerBroken = true; return null; }
+}
+
+function runDirect(a) {
+  try {
+    const { result } = handlers[a.type](a.payload, setBusyText);
+    finishTask(a.id, true, result);
+  } catch (e) { finishTask(a.id, false, e); }
+}
+
+// Việc mới luôn thay thế việc cũ đang chạy (ví dụ đổi phôi giữa lúc đang tạo hộp bao)
+function cancelActive() {
+  if (!active) return;
+  const a = active; active = null;
+  if (worker) { worker.terminate(); worker = null; }
+  showBusy(false);
+  const err = new Error('cancelled'); err.cancelled = true;
+  a.reject(err);
+}
+
+function runTask(type, payload, text) {
+  cancelActive();
+  const id = ++taskSeq;
+  return new Promise((resolve, reject) => {
+    const a = { id, type, payload, resolve, reject };
+    active = a;
+    showBusy(true, text);
+    const w = getWorker();
+    if (w) w.postMessage({ id, type, payload });
+    else setTimeout(() => runDirect(a), 30); // chừa thời gian cho trình duyệt vẽ thanh tiến trình
+  });
+}
+const isCancelled = (e) => e && e.cancelled;
+$('busyCancel').addEventListener('click', () => { cancelActive(); toast('Đã hủy.'); });
+let shBlocked = false;
 let phoiVer = 0;                        // tăng mỗi khi phôi thay đổi
 const modeVer = { shell: -1, box: -1 }; // phiên bản phôi mà từng tab đã xử lý
 
@@ -83,43 +157,67 @@ function toast(t, err) {
 }
 
 // ---------- Nạp phôi ----------
-function setBase(geo, name) {
-  const pc = geo.attributes && geo.attributes.position ? geo.attributes.position.count : 0;
-  if (pc < 12) throw new Error('file không có mặt tam giác nào (rỗng hoặc sai định dạng)');
-  const g = cleanGeometry(geo);
-  const tris = g.index ? g.index.count / 3 : 0;
-  if (tris < 4) throw new Error('mô hình không có đủ mặt để dựng khối');
+let repairNote = '';
+
+// Gắn phôi đã làm sạch vào hệ thống
+function commitBase(g, name) {
   g.computeBoundingBox();
   const bs = g.boundingBox.getSize(new THREE.Vector3());
   if (![bs.x, bs.y, bs.z].every((v) => isFinite(v) && v > 0)) throw new Error('kích thước mô hình không hợp lệ');
-  if (tris > 400000) throw new Error('mô hình có ' + Math.round(tris / 1000) + ' nghìn mặt, quá nặng. Hãy giảm mặt (Decimate) về dưới 150 nghìn rồi tải lại');
   baseGeo = g;
   rot.x = 0; rot.z = 0;
   pourManual = false;
   $('fileName').textContent = name;
   rebuildPhoi(true);
   const sz = phoiStats(phoi).size;
-  const big = Math.max(...sz), small = Math.min(...sz);
+  const big = Math.max(...sz);
   if (big > 700 || big < 25) toast('Kích thước phôi ' + fmt(sz[0]) + ' × ' + fmt(sz[2]) + ' × ' + fmt(sz[1]) + ' mm có vẻ bất thường. Kiểm tra “Đơn vị file” (mm, cm, m, inch).', true);
-  void small;
+}
+
+// Phôi mẫu (nhỏ, đã kín): làm sạch ngay trên trang
+function setBase(geo, name) {
+  const g = cleanGeometry(geo);
+  repairNote = '';
+  commitBase(g, name);
+}
+
+// File người dùng: làm sạch và tự vá lưới hở trong worker
+async function setBaseFromFile(geo, name) {
+  const pc = geo.attributes && geo.attributes.position ? geo.attributes.position.count : 0;
+  if (pc < 12) throw new Error('file không có mặt tam giác nào (rỗng hoặc sai định dạng)');
+  if (pc / 3 > 1200000) throw new Error('mô hình quá nặng (' + Math.round(pc / 3000) + ' nghìn mặt). Hãy giảm mặt (Decimate) rồi tải lại');
+  const raw = { pos: Float32Array.from(geo.attributes.position.array) };
+  const r = await runTask('prepare', { geo: raw, autoRepair: $('autoRepair').checked, res: 120 }, 'Đang đọc và làm sạch lưới...');
+  const g = unpack(r.geo);
+  const tris = g.index ? g.index.count / 3 : 0;
+  if (tris < 4) throw new Error('mô hình không có đủ mặt để dựng khối');
+  if (tris > 400000) throw new Error('mô hình có ' + Math.round(tris / 1000) + ' nghìn mặt, quá nặng. Hãy giảm mặt (Decimate) về dưới 150 nghìn rồi tải lại');
+  const i = r.info;
+  repairNote = i.repaired
+    ? `Đã tự vá lưới hở: ${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}. Độ phân giải vá khoảng ${fmt(i.voxel, 1)} mm, chi tiết nhỏ hơn mức này bị làm mượt.`
+    : '';
+  g.computeVertexNormals();
+  commitBase(g, name);
+  if (i.repaired) toast(repairNote, i.openAfter > 0);
 }
 
 function loadFile(file) {
   const ext = file.name.split('.').pop().toLowerCase();
   if (ext !== 'stl' && ext !== 'obj') return toast('Chỉ nhận file .stl hoặc .obj. File vừa chọn: ' + file.name, true);
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       let geo;
       if (ext === 'stl') geo = new STLLoader().parse(reader.result);
-      else if (ext === 'obj') {
+      else {
         const gs = [];
         new OBJLoader().parse(reader.result).traverse((o) => { if (o.isMesh) gs.push(o.geometry.index ? o.geometry.toNonIndexed() : o.geometry); });
         if (!gs.length) throw new Error('File OBJ không có mặt tam giác');
         geo = mergeGeos(gs);
-      } else throw new Error('Chỉ nhận file .stl hoặc .obj');
-      setBase(geo, file.name);
+      }
+      await setBaseFromFile(geo, file.name);
     } catch (e) {
+      if (isCancelled(e)) return;
       const m = /DataView|bounds|Offset|Invalid|Unexpected/i.test(e.message) ? 'file không đúng định dạng STL/OBJ hoặc bị hỏng' : e.message;
       toast('Không đọc được file “' + file.name + '”: ' + m + '. Phôi cũ được giữ nguyên.', true);
     }
@@ -175,6 +273,7 @@ function clearMold() {
 function rebuildPhoi(refit) {
   if (!baseGeo) return;
   phoiVer++;
+  cancelActive();
   clearMold();
   const unit = num('unit') || 1;
   let shrink = num('shrink');
@@ -189,7 +288,7 @@ function rebuildPhoi(refit) {
     `Phôi in (đã bù co ngót): <b>${fmt(st.size[0])} × ${fmt(st.size[2])} × ${fmt(st.size[1], 0)} mm</b> (rộng × sâu × cao)<br>` +
     `Sản phẩm sau nung: ${fmt(fs[0])} × ${fmt(fs[2])} × ${fmt(fs[1])} mm<br>` +
     `Thể tích phôi: ${fmt(st.volume / 1000, 1)} cm³ · ${fmt(st.tris)} mặt` +
-    (open ? `<br><span class="warn">⚠ Lưới phôi hở/không kín (${open} cạnh). Cần sửa trong Blender/Meshmixer (Make Manifold) nếu tạo khuôn lỗi.</span>` : '<br><span class="ok">✓ Lưới kín, dùng được.</span>') +
+    (open ? `<br><span class="warn">⚠ Lưới phôi hở/không kín (${open} cạnh). Bật “Tự vá lưới hở” rồi tải lại file, hoặc sửa trong Blender/Meshmixer (Make Manifold).</span>` : '<br><span class="ok">✓ Lưới kín, dùng được.</span>' + (repairNote ? `<br><span class="muted">${repairNote}</span>` : '')) +
     (st.tris > 150000 ? '<br><span class="warn">⚠ Quá nhiều mặt, tạo khuôn sẽ chậm. Nên giảm mặt (Decimate) về dưới 100k.</span>' : '');
   if (!pourManual) {
     let re = 0;
@@ -266,31 +365,28 @@ $('build').addEventListener('click', () => {
   if (!(o.wall >= 10)) return toast('Thành khuôn nên từ 10 mm trở lên.', true);
   if (!(o.base >= 5 && o.spare >= 5 && o.pourR >= 2)) return toast('Đáy dưới phôi, cao phễu rót và bán kính lỗ rót đang quá nhỏ hoặc để trống.', true);
   clearMold();
-  $('build').disabled = true;
   status('Đang tạo khuôn...');
-  setTimeout(() => {
-    try {
-      const t0 = performance.now();
-      mold = buildMold(phoi, o, status);
-      mold.pieces.forEach((p, i) => {
-        p.geometry.computeBoundingSphere();
-        const m = new THREE.Mesh(p.geometry, new THREE.MeshStandardMaterial({ color: COLORS[i % COLORS.length], roughness: 0.9 }));
-        m.userData.mid = p.mid;
-        moldGroup.add(m);
-      });
-      applyVisibility();
-      applyExplode();
-      showMoldInfo();
-      fitCamera(Math.max(mold.R, (mold.top - mold.bottom) / 2), (mold.top + mold.bottom) / 2);
-      status(`Xong trong ${fmt((performance.now() - t0) / 1000, 1)} giây.`);
-    } catch (e) {
-      console.error(e);
-      clearMold();
-      status('Tạo khuôn lỗi: ' + e.message + '. Thường do lưới phôi không kín hoặc quá nhiều mặt.', true);
-      toast('Tạo khuôn lỗi: ' + e.message, true);
-    }
-    $('build').disabled = false;
-  }, 30);
+  const t0 = performance.now();
+  runTask('mold', { phoi: pack(phoi), o }, 'Đang tạo khuôn...').then((r) => {
+    mold = { shape: r.shape, R: r.R, top: r.top, bottom: r.bottom, dims: r.dims, pieces: r.pieces.map((p) => ({ geometry: unpack(p.geo), volume: p.volume, mid: p.mid })) };
+    mold.pieces.forEach((p, i) => {
+      p.geometry.computeBoundingSphere();
+      const m = new THREE.Mesh(p.geometry, new THREE.MeshStandardMaterial({ color: COLORS[i % COLORS.length], roughness: 0.9 }));
+      m.userData.mid = p.mid;
+      moldGroup.add(m);
+    });
+    applyVisibility();
+    applyExplode();
+    showMoldInfo();
+    fitCamera(Math.max(mold.R, (mold.top - mold.bottom) / 2), (mold.top + mold.bottom) / 2);
+    status(`Xong trong ${fmt((performance.now() - t0) / 1000, 1)} giây.`);
+  }).catch((e) => {
+    if (isCancelled(e)) return;
+    console.error(e);
+    clearMold();
+    status('Tạo khuôn lỗi: ' + e.message, true);
+    toast('Tạo khuôn lỗi: ' + e.message + '. Nếu lỗi không rõ, thường do lưới phôi không kín hoặc quá nhiều mặt.', true);
+  });
 });
 
 const boxMode = () => $('shape').value === 'box' && $('n').value === '2';
@@ -324,14 +420,14 @@ function showMoldInfo() {
       b.textContent = `Hộp đổ mảnh ${i + 1}`;
       b.addEventListener('click', () => {
         b.disabled = true; status(`Đang tạo hộp đổ mảnh ${i + 1}...`);
-        setTimeout(() => {
-          try {
-            const c = buildCasing(mold, i);
-            download(new THREE.Mesh(c.geometry), `hop_do_manh${i + 1}.stl`);
-            status(`Hộp đổ mảnh ${i + 1}: ${fmt(c.size[0])} × ${fmt(c.size[2])} × ${fmt(c.size[1])} mm, khoảng ${fmt(c.volume / 1000)} cm³ nhựa đặc (slicer sẽ để rỗng bớt). Đặt mặt sàn xuống bàn in, đổ thạch cao tới mép tường.`);
-          } catch (e) { console.error(e); status('Tạo hộp đổ lỗi: ' + e.message, true); toast('Tạo hộp đổ lỗi: ' + e.message, true); }
-          b.disabled = false;
-        }, 30);
+        runTask('casing', { k: i }, `Đang tạo hộp đổ mảnh ${i + 1}...`).then((c) => {
+          const g = unpack(c.geo);
+          download(new THREE.Mesh(g), `hop_do_manh${i + 1}.stl`);
+          status(`Hộp đổ mảnh ${i + 1}: ${fmt(c.size[0])} × ${fmt(c.size[2])} × ${fmt(c.size[1])} mm, khoảng ${fmt(c.volume / 1000)} cm³ nhựa đặc (slicer sẽ để rỗng bớt). Đặt mặt sàn xuống bàn in, đổ thạch cao tới mép tường.`);
+        }).catch((e) => {
+          if (isCancelled(e)) return;
+          console.error(e); status('Tạo hộp đổ lỗi: ' + e.message, true); toast('Tạo hộp đổ lỗi: ' + e.message, true);
+        }).finally(() => { b.disabled = false; });
       });
       $('dlCasings').appendChild(b);
     });
@@ -446,7 +542,7 @@ let imgGeoMesh = null, imgFit = { r: 100, cy: 90 };
 const shellGroup = new THREE.Group();
 scene.add(shellGroup);
 let shellAngles = [0, 120, 240];
-let shellFaces = null, shellDraft = null, shellRes = null, invMesh = null, shellBusy = false, shellTimer = null;
+let shellFaces = null, shellDraft = null, shellRes = null, invMesh = null, shellTimer = null;
 const sh = (id) => num(id);
 // Giới hạn hợp lý cho từng thông số hộp bao: [id, nhỏ nhất, lớn nhất, tên]
 const SH_LIMITS = [['shWall', 8, 80, 'Độ dày thạch cao'], ['shShell', 0.8, 6, 'Độ dày vỏ in'], ['shDiv', 0.6, 6, 'Độ dày vách chia'], ['shGap', 0, 2, 'Khe hở lắp ráp'],
@@ -545,7 +641,8 @@ function shellAnalyze(refit = false) {
   const mouthR = phoiMouthRadius();
   if (sh('shPour') > mouthR * 1.05) msg += `<br><span class="warn">⚠ Bán kính cuống rót (${fmt(sh('shPour'), 1)} mm) lớn hơn miệng phôi (khoảng ${fmt(mouthR, 1)} mm). Nên giảm xuống dưới ${fmt(mouthR * 0.9, 1)} mm.</span>`;
   $('shDraft').innerHTML = msg;
-  $('shBuild').disabled = blocked || shellDraft.maxSpan > 180.01 || shellBusy;
+  shBlocked = blocked || shellDraft.maxSpan > 180.01;
+  $('shBuild').disabled = shBlocked || !!active;
   drawInverted(inv, refit);
 }
 
@@ -588,7 +685,7 @@ function shellPhoiChanged() {
     // đợi một chút: nếu người dùng còn đang đổi đơn vị/co ngót thì chỉ làm một lần ở cuối
     shellTimer = setTimeout(() => {
       shStatus('Đang phân tích phôi...');
-      setTimeout(() => { shellAutoRun(true); }, 30);
+      shellAutoRun(true);
     }, 450);
   } else {
     shellAnalyze(true);
@@ -597,12 +694,15 @@ function shellPhoiChanged() {
   }
 }
 function shellAutoRun(refit) {
-  shellAnalyze0();
-  const b = bestLayout(shellFaces, sh('shMinDraft'));
-  shellAngles = b.angles.map((x) => Math.round(x * 10) / 10);
-  renderAngles();
-  shellAnalyze(refit);
-  shellBuildNow();
+  const myVer = phoiVer;
+  const inv = invertPhoi(phoi, Math.max(5, sh('shSpare')));
+  runTask('layout', { phoi: pack(inv), minDraft: sh('shMinDraft') }, 'Đang phân tích số mảnh và góc chia...').then((b) => {
+    if (myVer !== phoiVer) return; // phôi đã đổi trong lúc phân tích
+    shellAngles = b.angles.map((x) => Math.round(x * 10) / 10);
+    renderAngles();
+    shellAnalyze(refit);
+    shellBuildNow();
+  }).catch((e) => { if (!isCancelled(e)) { shStatus('Phân tích lỗi: ' + e.message, true); toast('Phân tích lỗi: ' + e.message, true); } });
 }
 function shellAnalyze0() { shellFaces = prepareFaces(invertPhoi(phoi, Math.max(5, sh('shSpare')))); }
 
@@ -612,7 +712,7 @@ $('shAuto').addEventListener('click', () => {
   clearShell();
   shClamp();
   shStatus('Đang phân tích phôi...');
-  setTimeout(() => shellAutoRun(false), 30);
+  shellAutoRun(false);
 });
 $('shBuild').addEventListener('click', () => { clearTimeout(shellTimer); shellBuildNow(); });
 $('shShowDraft').addEventListener('change', () => { if (phoi && !shellRes) shellAnalyze(); });
@@ -620,27 +720,26 @@ $('shShowDraft').addEventListener('change', () => { if (phoi && !shellRes) shell
 $('shMinDraft').addEventListener('change', () => { clearShell(); shellAnalyze(); });
 
 function shellBuildNow() {
-  if (!phoi || shellBusy) return;
+  if (!phoi) return;
   shClamp();
-  if (shellDraft && shellDraft.maxSpan > 180.01) return shStatus('Có mảnh rộng hơn 180°, hãy thêm vách chia.', true);
-  shellBusy = true; $('shBuild').disabled = true; $('shAuto').disabled = true;
+  if (shellDraft && shellDraft.maxSpan > 180.01) return toast('Có mảnh rộng hơn 180°, hãy thêm vách chia.', true);
   const o = {
     angles: [...shellAngles].sort((a, b) => a - b), wall: sh('shWall'), shell: sh('shShell'), divider: sh('shDiv'), gap: sh('shGap'),
     spare: sh('shSpare'), pourR: sh('shPour'), base: sh('shBase'), keyR: sh('shKey'), clear: sh('shGap'),
   };
-  setTimeout(() => {
-    try {
-      const t0 = performance.now();
-      const r = buildShell(phoi, o, (m) => shStatus(m));
-      showShell(r, o);
-      shStatus(`Xong trong ${fmt((performance.now() - t0) / 1000, 1)} giây.`);
-    } catch (e) {
-      console.error(e);
-      shStatus('Tạo hộp bao lỗi: ' + e.message, true);
-      toast('Tạo hộp bao lỗi: ' + e.message + '. Nếu lỗi không rõ, thường do lưới phôi không kín hoặc quá nhiều mặt.', true);
-    }
-    shellBusy = false; $('shBuild').disabled = false; $('shAuto').disabled = false;
-  }, 30);
+  const myVer = phoiVer, t0 = performance.now();
+  shStatus('Đang tạo hộp bao...');
+  runTask('shell', { phoi: pack(phoi), o }, 'Đang tạo hộp bao...').then((r) => {
+    if (myVer !== phoiVer) return;
+    r.parts.forEach((p) => { p.geometry = unpack(p.geo); });
+    showShell(r, o);
+    shStatus(`Xong trong ${fmt((performance.now() - t0) / 1000, 1)} giây.`);
+  }).catch((e) => {
+    if (isCancelled(e)) return;
+    console.error(e);
+    shStatus('Tạo hộp bao lỗi: ' + e.message, true);
+    toast('Tạo hộp bao lỗi: ' + e.message + '. Nếu lỗi không rõ, thường do lưới phôi không kín hoặc quá nhiều mặt.', true);
+  });
 }
 
 const KIND_COLOR = { divider: 0xd0382c, base: 0x4fb6a0 };
