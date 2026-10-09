@@ -167,12 +167,17 @@
     <h2>3. Thông số hộp bao (mm)</h2>
     <label>Độ dày thạch cao <input type="number" id="shWall" value="25" min="10" step="1"></label>
     <label>Độ dày vỏ in <input type="number" id="shShell" value="2" min="1" step="0.2"></label>
-    <label>Độ dày vách chia <input type="number" id="shDiv" value="1.6" min="0.8" step="0.2"></label>
+    <label>Độ dày vách chia <input type="number" id="shDiv" value="1.2" min="0.6" step="0.2"></label>
     <label>Khe hở lắp ráp <input type="number" id="shGap" value="0.3" min="0" step="0.1"></label>
     <label>Cao cuống rót <input type="number" id="shSpare" value="25" min="8" step="1"></label>
     <label>Bán kính cuống rót <input type="number" id="shPour" value="16" min="3" step="1"></label>
     <label>Thạch cao phủ trên chân phôi <input type="number" id="shBase" value="20" min="10" step="1"></label>
-    <label>Chấm định vị (bán kính, 0 = tắt) <input type="number" id="shKey" value="4" min="0" max="10" step="0.5"></label>
+    <label>Kiểu chốt định vị
+      <select id="shKeyType" style="width:auto"><option value="auto">Tự chọn theo số mảnh</option><option value="dome">Lồi – lõm khớp nhau</option><option value="ball">Lỗ lõm + bi rời</option><option value="none">Không có chốt</option></select>
+    </label>
+    <label>Bán kính chốt (mm) <input type="number" id="shKey" value="5" min="0" max="10" step="0.5"></label>
+    <label>Số chốt mỗi mặt chia <input type="number" id="shKeyN" value="2" min="1" max="4" step="1"></label>
+    <div class="muted">Lồi – lõm: mảnh này có chốt lồi, mảnh kề có lỗ khớp, hợp 2–3 mảnh. Bi rời: lỗ lõm hai mặt, đặt bi vào, hợp từ 4 mảnh trở lên.</div>
     <button class="primary" id="shBuild">Tạo hộp bao</button>
     <div id="shStatus" class="muted" style="margin-top:8px"></div>
   </section>

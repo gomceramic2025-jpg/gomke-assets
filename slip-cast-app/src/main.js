@@ -546,7 +546,7 @@ let shellFaces = null, shellDraft = null, shellRes = null, invMesh = null, shell
 const sh = (id) => num(id);
 // Giới hạn hợp lý cho từng thông số hộp bao: [id, nhỏ nhất, lớn nhất, tên]
 const SH_LIMITS = [['shWall', 8, 80, 'Độ dày thạch cao'], ['shShell', 0.8, 6, 'Độ dày vỏ in'], ['shDiv', 0.6, 6, 'Độ dày vách chia'], ['shGap', 0, 2, 'Khe hở lắp ráp'],
-  ['shSpare', 5, 80, 'Cao cuống rót'], ['shPour', 2, 120, 'Bán kính cuống rót'], ['shBase', 5, 120, 'Lớp thạch cao phủ trên chân phôi'], ['shKey', 0, 10, 'Chấm định vị']];
+  ['shSpare', 5, 80, 'Cao cuống rót'], ['shPour', 2, 120, 'Bán kính cuống rót'], ['shBase', 5, 120, 'Lớp thạch cao phủ trên chân phôi'], ['shKey', 0, 10, 'Bán kính chốt'], ['shKeyN', 1, 4, 'Số chốt mỗi mặt chia']];
 function shClamp() {
   const fixed = [];
   for (const [id, lo, hi, name] of SH_LIMITS) {
@@ -716,7 +716,7 @@ $('shAuto').addEventListener('click', () => {
 });
 $('shBuild').addEventListener('click', () => { clearTimeout(shellTimer); shellBuildNow(); });
 $('shShowDraft').addEventListener('change', () => { if (phoi && !shellRes) shellAnalyze(); });
-['shWall', 'shShell', 'shDiv', 'shGap', 'shSpare', 'shPour', 'shBase', 'shKey'].forEach((id) => $(id).addEventListener('change', () => { shClamp(); clearShell(); shellAnalyze(); }));
+['shWall', 'shShell', 'shDiv', 'shGap', 'shSpare', 'shPour', 'shBase', 'shKey', 'shKeyN', 'shKeyType'].forEach((id) => $(id).addEventListener('change', () => { shClamp(); clearShell(); shellAnalyze(); }));
 $('shMinDraft').addEventListener('change', () => { clearShell(); shellAnalyze(); });
 
 function shellBuildNow() {
@@ -726,6 +726,7 @@ function shellBuildNow() {
   const o = {
     angles: [...shellAngles].sort((a, b) => a - b), wall: sh('shWall'), shell: sh('shShell'), divider: sh('shDiv'), gap: sh('shGap'),
     spare: sh('shSpare'), pourR: sh('shPour'), base: sh('shBase'), keyR: sh('shKey'), clear: sh('shGap'),
+    keyCount: Math.round(sh('shKeyN')), keyType: $('shKeyType').value === 'auto' ? (shellAngles.length <= 3 ? 'dome' : 'ball') : $('shKeyType').value,
   };
   const myVer = phoiVer, t0 = performance.now();
   shStatus('Đang tạo hộp bao...');
@@ -743,13 +744,20 @@ function shellBuildNow() {
 }
 
 const KIND_COLOR = { divider: 0xd0382c, base: 0x4fb6a0 };
+function keyText(k, o) {
+  if (!k || k.type === 'none') return (o.keyType === 'none' || !(o.keyR > 0)) ? '<br><span class="muted">Không có chốt định vị.</span>' : '<br><span class="warn">⚠ Thành thạch cao quá mỏng nên không đặt được chốt. Tăng “Độ dày thạch cao” (cần khoảng 14 mm trở lên) hoặc giảm bán kính chốt.</span>';
+  const shrink = k.clamped ? ` <span class="warn">(đã thu nhỏ từ ${fmt(o.keyR, 1)} mm cho vừa thành thạch cao)</span>` : '';
+  if (k.type === 'dome') return `<br>Chốt <b>lồi – lõm</b>: ${k.count} chốt, bán kính ${fmt(k.r, 1)} mm${shrink}. Mỗi mảnh có chốt lồi khớp vào lỗ của mảnh kề.`;
+  return `<br>Chốt <b>lỗ lõm + bi rời</b>: ${k.count} lỗ, cần <b>${k.count} viên bi ⌀ ${fmt(k.ballD, 1)} mm</b> (file “Bi định vị” để in, hoặc dùng bi thép/bi thủy tinh cỡ này)${shrink}.`;
+}
+
 function showShell(r, o) {
   while (shellGroup.children.length) { const m = shellGroup.children.pop(); if (m.geometry) m.geometry.dispose(); }
   invMesh = null;
   shellRes = { r, o };
   let pi = 0;
   r.parts.forEach((p) => {
-    if (p.kind === 'phoi') return;
+    if (p.kind === 'phoi' || p.kind === 'key') return;
     const color = p.kind === 'panel' ? PANEL_COLORS[pi++ % PANEL_COLORS.length] : KIND_COLOR[p.kind];
     const m = new THREE.Mesh(p.geometry, new THREE.MeshStandardMaterial({ color, roughness: 0.7, side: THREE.DoubleSide }));
     m.userData = { kind: p.kind, mid: p.mid };
@@ -768,7 +776,7 @@ function showShell(r, o) {
   const nP = r.parts.filter((p) => p.kind === 'panel').length, nD = r.parts.filter((p) => p.kind === 'divider').length;
   $('shInfo').innerHTML =
     `<span class="sw" style="background:#4fb6a0"></span>1 đế · <span class="sw" style="background:#d0382c"></span>${nD} vách chia · <span class="sw" style="background:#e3b04b"></span>${nP} vỏ ngoài<br>` +
-    `Hộp bao Ø${fmt(r.dims.D)} × cao ${fmt(r.dims.H)} mm. Chia ${nD} mảnh thạch cao.`;
+    `Hộp bao Ø${fmt(r.dims.D)} × cao ${fmt(r.dims.H)} mm. Chia ${nD} mảnh thạch cao.` + keyText(r.keyInfo, o);
   showShellPlaster();
   $('shDlAll').disabled = false;
   const box = $('shDlParts'); box.innerHTML = '';
@@ -777,7 +785,7 @@ function showShell(r, o) {
     b.addEventListener('click', () => download(new THREE.Mesh(p.geometry), p.name + '.stl'));
     box.appendChild(b);
   });
-  $('shGuide').innerHTML = `Cách dùng: in cuống + phôi đảo ngược, đế, vách và vỏ. Đặt phôi lên đế, cắm các vách chia vào sát phôi, ghép vỏ ngoài vào giữa các vách và buộc dây thun. Trét kín mối nối bằng đất sét, rồi đổ thạch cao tới ${fmt(r.yTop)} mm. Chấm tròn trên vách tạo lỗ lõm trên thạch cao: đặt viên đất sét hoặc bi nhỏ vào làm chốt định vị khi ghép khuôn.`;
+  $('shGuide').innerHTML = `Cách dùng: in cuống + phôi đảo ngược, đế, vách và vỏ. Đặt phôi lên đế, cắm các vách chia vào sát phôi, ghép vỏ ngoài vào giữa các vách và buộc dây thun. Trét kín mối nối bằng đất sét, rồi đổ thạch cao tới ${fmt(r.yTop)} mm. Chốt định vị tự tạo trên thạch cao: nếu chọn bi rời thì đặt bi vào các lỗ khi ghép khuôn.`;
 }
 
 function showShellPlaster() {

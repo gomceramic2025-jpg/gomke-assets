@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { Evaluator, SUBTRACTION, ADDITION, INTERSECTION } from 'three-bvh-csg';
 import { cleanGeometry, meshVolume, phoiStats, toBrush, stripGeo, sectorsFromAngles } from './mold.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
@@ -205,8 +206,29 @@ export function buildShell(phoi, o, onProgress = () => {}) {
     parts.push({ kind: 'panel', name: `vo_ngoai_${k + 1}`, label: `Vỏ ${k + 1}`, geometry: stripGeo(pn.geometry), mid: s.mid * DEG });
   });
 
-  // chốt định vị: hai chấm tròn mỗi mặt vách, tạo lỗ lõm trên thạch cao
-  const keySpots = [0.3, 0.7].map((f) => ({ y: spare + H * f }));
+  // ---- Chốt định vị ----
+  // 'dome': vòm lồi ở vách; thạch cao một bên đổ vào lòng vòm thành chốt lồi, bên kia có lỗ lõm khớp (hợp 2-3 mảnh).
+  // 'ball': lỗ lõm ở cả hai mặt, đặt bi rời vào (hợp mọi số mảnh, nhất là từ 4 mảnh).
+  let keyType = o.keyType === 'dome' ? 'dome' : o.keyType === 'none' ? 'none' : 'ball';
+  const keyCount = Math.max(1, Math.min(4, Math.round(o.keyCount || 2)));
+  const maxK = wall * 0.5 - 3.5; // chốt phải nằm gọn trong bề dày thạch cao
+  const kr = Math.min(keyR, maxK);
+  const keysOn = keyType !== 'none' && keyR > 0 && kr >= 2.5;
+  if (!keysOn) keyType = 'none';
+  const domeT = 1.0;
+  const keySpots = Array.from({ length: keyCount }, (_, i) => ({ y: spare + H * (keyCount === 1 ? 0.5 : 0.25 + (0.5 * i) / (keyCount - 1)) }));
+  const frame = (ang, rp, y) => { // hệ trục: x = hướng ra ngoài, y = lên, z = pháp tuyến mặt vách
+    const r = new THREE.Vector3(Math.cos(ang * DEG), 0, Math.sin(ang * DEG)), n = new THREE.Vector3(-Math.sin(ang * DEG), 0, Math.cos(ang * DEG));
+    return new THREE.Matrix4().makeBasis(r, new THREE.Vector3(0, 1, 0), n).setPosition(r.x * rp, y, r.z * rp);
+  };
+  const noUv = (g) => { const q = g.index ? g.toNonIndexed() : g.clone(); for (const k of Object.keys(q.attributes)) if (k !== 'position' && k !== 'normal') q.deleteAttribute(k); return q; };
+  let shellPlus = null, shellMinus = null;
+  if (keysOn && keyType === 'dome') {
+    const hollow = ev.evaluate(toBrush(new THREE.SphereGeometry(kr + domeT, 28, 20)), toBrush(new THREE.SphereGeometry(kr, 28, 20)), SUBTRACTION);
+    const half = (sgn) => { const b = new THREE.BoxGeometry(2 * (kr + domeT) + 2, 2 * (kr + domeT) + 2, kr + domeT + 1); b.translate(0, 0, (sgn * (kr + domeT + 1)) / 2); return b; };
+    shellPlus = ev.evaluate(toBrush(hollow.geometry), toBrush(half(1)), INTERSECTION).geometry;
+    shellMinus = ev.evaluate(toBrush(hollow.geometry), toBrush(half(-1)), INTERSECTION).geometry;
+  }
 
   const dividerBase = radialSolid(prof, wall + t, 0, yPanel);
   const invCBrush = toBrush(invC), sprueCBrush = toBrush(sprueC);
@@ -217,12 +239,18 @@ export function buildShell(phoi, o, onProgress = () => {}) {
     let d = ex(slabSolid(ang, td + Math.abs(nudge) * 0.1, Lbig, 0, yPanel), dividerBase, INTERSECTION);
     d = ev.evaluate(toBrush(d.geometry), invCBrush, SUBTRACTION);
     d = ev.evaluate(toBrush(d.geometry), sprueCBrush, SUBTRACTION);
-    if (keyR > 0) {
-      for (const ks of keySpots) {
-        const rp = rAt(prof, ks.y, ang * DEG) + wall * 0.5;
-        const sp = new THREE.SphereGeometry(keyR, 20, 14);
-        sp.translate(rp * Math.cos(ang * DEG), ks.y, rp * Math.sin(ang * DEG));
-        d = ev.evaluate(toBrush(d.geometry), toBrush(sp), ADDITION);
+    if (keysOn) {
+      const spots = keySpots.map((ks, i) => ({ ks, i, rp: rAt(prof, ks.y, ang * DEG) + wall * 0.5 }));
+      if (keyType === 'ball') {
+        const balls = spots.map(({ ks, rp }) => { const g = noUv(new THREE.SphereGeometry(kr, 20, 14)); g.applyMatrix4(frame(ang, rp, ks.y)); return g; });
+        d = ev.evaluate(toBrush(d.geometry), toBrush(mergeGeometries(balls)), ADDITION);
+      } else {
+        // 1) khoét lỗ tròn trên vách để thạch cao một bên tràn vào lòng vòm
+        const cuts = spots.map(({ ks, rp }) => { const g = noUv(new THREE.SphereGeometry(kr, 20, 14)); g.applyMatrix4(frame(ang, rp, ks.y)); return g; });
+        d = ev.evaluate(toBrush(d.geometry), toBrush(mergeGeometries(cuts)), SUBTRACTION);
+        // 2) gắn vỏ vòm nhô sang phía kia, luân phiên hai phía để mỗi mảnh có cả chốt lồi lẫn lỗ lõm
+        const doms = spots.map(({ ks, i, rp }) => { const g = noUv(i % 2 === 0 ? shellPlus : shellMinus); g.applyMatrix4(frame(ang, rp, ks.y)); return g; });
+        d = ev.evaluate(toBrush(d.geometry), toBrush(mergeGeometries(doms)), ADDITION);
       }
     }
     return d;
@@ -246,10 +274,20 @@ export function buildShell(phoi, o, onProgress = () => {}) {
   const lip = ev.evaluate(toBrush(lipOut), toBrush(lipIn), SUBTRACTION);
   const baseP = ev.evaluate(toBrush(plate), toBrush(lip.geometry), ADDITION);
   parts.push({ kind: 'base', name: 'de', label: 'Đế', geometry: stripGeo(baseP.geometry), mid: 0 });
+  const keyInfo = { type: keyType, r: kr, count: 0, clamped: keysOn && kr < keyR };
+  if (keysOn) {
+    keyInfo.count = angles.length * keyCount;
+    if (keyType === 'ball') {
+      const rb = kr - 0.25, nb = keyInfo.count, row = [];
+      for (let i = 0; i < nb; i++) { const g = noUv(new THREE.SphereGeometry(rb, 24, 16)); g.translate(i * (2 * rb + 3), rb, 0); row.push(g); }
+      parts.push({ kind: 'key', name: 'bi_dinh_vi', label: `Bi định vị (${nb} viên)`, geometry: stripGeo(mergeGeometries(row)), mid: 0 });
+      keyInfo.ballD = 2 * rb;
+    }
+  }
   parts.push({ kind: 'phoi', name: 'phoi_dao_nguoc_kem_cuong', label: 'Phôi + cuống', geometry: positive, mid: 0 });
 
   const vol = (g) => Math.abs(meshVolume(g.index ? g : g.toNonIndexed()));
   const divVol = parts.filter((p) => p.kind === 'divider').reduce((s, p) => s + vol(p.geometry), 0);
   const plasterMm3 = Math.max(0, vol(E0) - vol(inv) - vol(sprue) - divVol);
-  return { parts, plasterMm3, yTop, rmax, dims: { D: 2 * (rmax + wall + t), H: yPanel }, H };
+  return { parts, plasterMm3, yTop, rmax, dims: { D: 2 * (rmax + wall + t), H: yPanel }, H, keyInfo };
 }
