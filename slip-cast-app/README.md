@@ -21,3 +21,4 @@ Sửa code: `npm install` rồi `node build.mjs` để đóng gói lại `index.
 - `make_huge.mjs`, `huge_ui.mjs`: tạo file hơn 1 triệu mặt và thử tải lên (tự giảm mặt qua voxel, chọn độ chi tiết).
 - `threemf.mjs`, `threemf_ui.mjs`, `solid_node.mjs`, `solid_dbg.mjs`: đọc file 3MF (zip + XML, có component, phép biến đổi, đơn vị) và điền đầy vỏ rỗng hở thành khối đặc.
 - `snap_node.mjs`, `quality_ui.mjs`, `tri_quality.mjs`, `shell_clean.mjs`, `blow_dbg.mjs`: đo độ bám bề mặt gốc sau khi dựng lại lưới, chụp phôi để so mắt, tìm chỗ phép cắt hộp bao bị bùng nổ số mặt.
+- `shapes.mjs`, `shape_ui.mjs`, `shape_compare.mjs`, `plaster_sim2.mjs`, `circle.mjs`: hộp bao 3 kiểu (ôm phôi / hình trụ / hình hộp), gân giữ dây, chế độ không in vỏ, tâm vòng tròn nhỏ nhất; mô phỏng đổ thạch cao kiểm tra không rò giữa các mảnh.

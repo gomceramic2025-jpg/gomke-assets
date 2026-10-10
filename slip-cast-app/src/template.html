@@ -170,6 +170,14 @@
 
   <section>
     <h2>3. Thông số hộp bao (mm)</h2>
+    <label>Dạng vỏ ngoài
+      <select id="shShape" style="width:auto"><option value="conformal">Uốn theo phôi (tiết kiệm thạch cao)</option><option value="cylinder">Hình trụ tròn</option><option value="box">Hình hộp chữ nhật</option></select>
+    </label>
+    <div class="muted" id="shShapeNote"></div>
+    <label><span>Đặt trục ở tâm vòng tròn nhỏ nhất (hình trụ)</span> <input type="checkbox" id="shCenter" checked></label>
+    <label><span>Gân giữ dây thun/đai trên vỏ in</span> <input type="checkbox" id="shRibs" checked></label>
+    <label><span>Không in vỏ (dùng tấm/ống có sẵn)</span> <input type="checkbox" id="shNoPanel"></label>
+    <div class="muted">Khi không in vỏ, ô “Độ dày vỏ in” là độ dày tấm bạn dùng. App chỉ xuất vách chia và đế, kèm kích thước tấm cần cắt.</div>
     <label>Độ dày thạch cao <input type="number" id="shWall" value="25" min="10" step="1"></label>
     <label>Độ dày vỏ in <input type="number" id="shShell" value="2" min="1" step="0.2"></label>
     <label>Độ dày vách chia <input type="number" id="shDiv" value="1.2" min="0.6" step="0.2"></label>

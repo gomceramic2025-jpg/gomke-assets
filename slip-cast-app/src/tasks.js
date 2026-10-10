@@ -74,7 +74,7 @@ export const handlers = {
   shell({ phoi, o }, progress) {
     const r = buildShell(unpack(phoi), o, progress);
     const parts = r.parts.map((p) => ({ kind: p.kind, name: p.name, label: p.label, mid: p.mid, geo: pack(p.geometry, false) }));
-    return { result: { parts, plasterMm3: r.plasterMm3, yTop: r.yTop, rmax: r.rmax, dims: r.dims, H: r.H, keyInfo: r.keyInfo }, transfer: bufs(parts.map((p) => p.geo)) };
+    return { result: { parts, plasterMm3: r.plasterMm3, yTop: r.yTop, rmax: r.rmax, dims: r.dims, H: r.H, keyInfo: r.keyInfo, sheet: r.sheet }, transfer: bufs(parts.map((p) => p.geo)) };
   },
 
   mold({ phoi, o }, progress) {

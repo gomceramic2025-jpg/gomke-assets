@@ -90,7 +90,7 @@ function rAt(prof, y, phi) {
 
 // Khối kín bao quanh trục, bán kính = đường bao + offset, từ y0 đến y1.
 function radialSolid(prof, offset, y0, y1, nSeg = 144) {
-  const rows = Math.max(2, Math.ceil((y1 - y0) / (prof.dy / 2)) + 1);
+  const rows = prof.flat ? 2 : Math.max(2, Math.ceil((y1 - y0) / (prof.dy / 2)) + 1); // trụ thẳng không cần chia nhỏ theo chiều cao
   const pos = [], idx = [];
   for (let j = 0; j < rows; j++) {
     const y = y0 + ((y1 - y0) * j) / (rows - 1);
@@ -112,6 +112,15 @@ function radialSolid(prof, offset, y0, y1, nSeg = 144) {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setIndex(idx);
   return cleanGeometry(g);
+}
+
+// Khối hộp chữ nhật quanh trục (nửa cạnh hx, hz), từ y0 đến y1.
+function boxSolid(hx, hz, y0, y1) {
+  const g = new THREE.BoxGeometry(2 * hx, y1 - y0, 2 * hz);
+  g.translate(0, (y0 + y1) / 2, 0);
+  const q = g.toNonIndexed();
+  for (const k of Object.keys(q.attributes)) if (k !== 'position' && k !== 'normal') q.deleteAttribute(k);
+  return q;
 }
 
 // ---------- Đa giác cắt theo mảnh ----------
@@ -166,6 +175,8 @@ export function buildShell(phoi, o, onProgress = () => {}) {
   const secs = sectorsFromAngles(angles);
   if (secs.some((x) => x.span < 3)) throw new Error('Hai vách chia trùng góc hoặc quá sát nhau (dưới 3°)');
   if (secs.some((x) => x.span > 180.01)) throw new Error('Có mảnh rộng hơn 180°, không tháo ra được');
+  const shape = o.shape === 'cylinder' || o.shape === 'box' ? o.shape : 'conformal';
+  const noPanels = !!o.noPanels && shape !== 'conformal';
   const st = phoiStats(phoi);
   const H = st.H;
   const yTop = spare + H + base, yPanel = yTop + 4;
@@ -180,43 +191,75 @@ export function buildShell(phoi, o, onProgress = () => {}) {
   sprue.translate(0, (spare + 0.5) / 2, 0);
   const positive = stripGeo(ex(inv, sprue, ADDITION).geometry);
 
-  onProgress('Tính đường bao uốn theo phôi...');
+  onProgress(shape === 'conformal' ? 'Tính đường bao uốn theo phôi...' : 'Tính khung ngoài...');
   const prof = radialProfile([inv, sprue], yTop);
   let rmax = 0;
   for (let i = 0; i < prof.R.length; i++) rmax = Math.max(rmax, prof.R[i]);
-  const Lbig = (rmax + wall + t) * 2 + 20;
+  // kích thước thật của phôi + cuống quanh trục (không qua làm phồng của đường bao)
+  let rv = pourR, hx = pourR, hz = pourR;
+  { const P = inv.attributes.position; for (let i = 0; i < P.count; i++) { const x = P.getX(i), z = P.getZ(i); rv = Math.max(rv, Math.hypot(x, z)); hx = Math.max(hx, Math.abs(x)); hz = Math.max(hz, Math.abs(z)); } }
+  const Rc = rv + wall;
+  const Lbig = (Math.hypot(hx, hz) + wall + t) * 2 + 20;
 
   // phôi nới nhẹ theo phương ngang để vách chia lắp vào được
-  const sc = 1 + clear / Math.max(rmax, 1);
+  const sc = 1 + clear / Math.max(rv, 1);
   const invC = inv.clone(); invC.scale(sc, 1, sc);
   const sprueC = sprue.clone(); sprueC.scale(sc, 1, sc);
 
-  const E0 = radialSolid(prof, wall, 0, yTop);
-  const outerSolid = radialSolid(prof, wall + t, 0, yPanel);
+  // Khối bao ngoài của thạch cao, mở rộng thêm off (mm) ra ngoài: uốn theo phôi, hình trụ hoặc hình hộp
+  const cylProf = { R: new Float32Array(prof.R.length).fill(Math.max(1, Rc - wall)), ny: prof.ny, nPhi: prof.nPhi, dy: prof.dy, flat: true };
+  const envProf = shape === 'cylinder' ? cylProf : prof;
+  const env = (off, y0, y1) => (shape === 'box' ? boxSolid(hx + wall + off, hz + wall + off, y0, y1) : radialSolid(envProf, wall + off, y0, y1));
+  // bán kính mép ngoài thạch cao theo hướng phi (rad) ở độ cao y
+  const outerR = (y, phi) => {
+    if (shape === 'conformal') return rAt(prof, y, phi) + wall;
+    if (shape === 'cylinder') return Rc;
+    const c = Math.abs(Math.cos(phi)), s2 = Math.abs(Math.sin(phi));
+    return Math.min(c > 1e-9 ? (hx + wall) / c : Infinity, s2 > 1e-9 ? (hz + wall) / s2 : Infinity);
+  };
+
+  const E0 = env(0, 0, yTop);
+  const outerSolid = env(t, 0, yPanel);
   const sec = sectorsFromAngles(angles);
   const parts = [];
 
-  onProgress('Tạo vỏ ngoài...');
-  const tube = ev.evaluate(toBrush(outerSolid), toBrush(radialSolid(prof, wall, -1, yPanel + 1)), SUBTRACTION);
-  const tubeG = tube.geometry;
-  sec.forEach((s, k) => {
-    onProgress(`Vỏ ngoài ${k + 1}/${sec.length}...`);
-    const w = sectorSolid(s.a0, s.a1, td / 2 + gap, Lbig, -2, yPanel + 2);
-    const pn = ex(tubeG, w, INTERSECTION);
-    parts.push({ kind: 'panel', name: `vo_ngoai_${k + 1}`, label: `Vỏ ${k + 1}`, geometry: stripGeo(pn.geometry), mid: s.mid * DEG });
-  });
+  if (!noPanels) {
+    onProgress('Tạo vỏ ngoài...');
+    const tube = ev.evaluate(toBrush(outerSolid), toBrush(env(0, -1, yPanel + 1)), SUBTRACTION);
+    const tubeG = tube.geometry;
+    // gân giữ dây thun/đai: hai rãnh, mỗi rãnh gồm hai gân vòng cao 3 mm
+    let ribs = null;
+    if (o.ribs && shape !== 'conformal') {
+      onProgress('Tạo gân giữ dây thun...');
+      const rings = [];
+      for (const c of [0.22, 0.72]) for (const dy of [-8, 5]) {
+        const y0 = c * yTop + dy, y1 = y0 + 3;
+        rings.push(ev.evaluate(toBrush(env(t + 3, y0, y1)), toBrush(env(t - 0.2, y0 - 1, y1 + 1)), SUBTRACTION).geometry);
+      }
+      ribs = mergeGeometries(rings.map((g) => { const q = g.index ? g.toNonIndexed() : g.clone(); for (const k of Object.keys(q.attributes)) if (k !== 'position' && k !== 'normal') q.deleteAttribute(k); return q; }));
+    }
+    sec.forEach((s, k) => {
+      onProgress(`Vỏ ngoài ${k + 1}/${sec.length}...`);
+      const w = sectorSolid(s.a0, s.a1, td / 2 + gap, Lbig, -2, yPanel + 2);
+      let pn = ex(tubeG, w, INTERSECTION);
+      if (ribs) pn = ev.evaluate(toBrush(pn.geometry), toBrush(ex(ribs, w, INTERSECTION).geometry), ADDITION);
+      parts.push({ kind: 'panel', name: `vo_ngoai_${k + 1}`, label: `Vỏ ${k + 1}`, geometry: stripGeo(pn.geometry), mid: s.mid * DEG });
+    });
+  }
 
   // ---- Chốt định vị ----
   // 'dome': vòm lồi ở vách; thạch cao một bên đổ vào lòng vòm thành chốt lồi, bên kia có lỗ lõm khớp (hợp 2-3 mảnh).
   // 'ball': lỗ lõm ở cả hai mặt, đặt bi rời vào (hợp mọi số mảnh, nhất là từ 4 mảnh).
   let keyType = o.keyType === 'dome' ? 'dome' : o.keyType === 'none' ? 'none' : 'ball';
   const keyCount = Math.max(1, Math.min(4, Math.round(o.keyCount || 2)));
-  const maxK = wall * 0.5 - 3.5; // chốt phải nằm gọn trong bề dày thạch cao
-  const kr = Math.min(keyR, maxK);
+  const keySpots = Array.from({ length: keyCount }, (_, i) => ({ y: spare + H * (keyCount === 1 ? 0.5 : 0.25 + (0.5 * i) / (keyCount - 1)) }));
+  // chốt phải nằm gọn trong bề dày thạch cao thật tại chỗ đặt (mỏng nhất trên mọi vách)
+  let minThick = Infinity;
+  for (const a of angles) for (const ks of keySpots) minThick = Math.min(minThick, outerR(ks.y, a * DEG) - rAt(prof, ks.y, a * DEG));
+  const kr = Math.min(keyR, minThick / 2 - 3.5);
   const keysOn = keyType !== 'none' && keyR > 0 && kr >= 2.5;
   if (!keysOn) keyType = 'none';
   const domeT = 1.0;
-  const keySpots = Array.from({ length: keyCount }, (_, i) => ({ y: spare + H * (keyCount === 1 ? 0.5 : 0.25 + (0.5 * i) / (keyCount - 1)) }));
   const frame = (ang, rp, y) => { // hệ trục: x = hướng ra ngoài, y = lên, z = pháp tuyến mặt vách
     const r = new THREE.Vector3(Math.cos(ang * DEG), 0, Math.sin(ang * DEG)), n = new THREE.Vector3(-Math.sin(ang * DEG), 0, Math.cos(ang * DEG));
     return new THREE.Matrix4().makeBasis(r, new THREE.Vector3(0, 1, 0), n).setPosition(r.x * rp, y, r.z * rp);
@@ -230,7 +273,7 @@ export function buildShell(phoi, o, onProgress = () => {}) {
     shellMinus = ev.evaluate(toBrush(hollow.geometry), toBrush(half(-1)), INTERSECTION).geometry;
   }
 
-  const dividerBase = radialSolid(prof, wall + t, 0, yPanel);
+  const dividerBase = env(noPanels ? 0 : t, 0, yPanel); // không in vỏ: vách dừng ngay mép trong để tấm có sẵn áp sát
   const invCBrush = toBrush(invC), sprueCBrush = toBrush(sprueC);
   // Vách chia: nếu mặt phẳng cắt trùng đúng mặt đối xứng của phôi, phép trừ có thể sinh số mặt khổng lồ.
   // Khi đó thử lại với góc lệch rất nhỏ (< 0,2 độ), không ảnh hưởng thực tế.
@@ -240,7 +283,7 @@ export function buildShell(phoi, o, onProgress = () => {}) {
     d = ev.evaluate(toBrush(d.geometry), invCBrush, SUBTRACTION);
     d = ev.evaluate(toBrush(d.geometry), sprueCBrush, SUBTRACTION);
     if (keysOn) {
-      const spots = keySpots.map((ks, i) => ({ ks, i, rp: rAt(prof, ks.y, ang * DEG) + wall * 0.5 }));
+      const spots = keySpots.map((ks, i) => ({ ks, i, rp: (rAt(prof, ks.y, ang * DEG) + outerR(ks.y, ang * DEG)) / 2 }));
       if (keyType === 'ball') {
         const balls = spots.map(({ ks, rp }) => { const g = noUv(new THREE.SphereGeometry(kr, 20, 14)); g.applyMatrix4(frame(ang, rp, ks.y)); return g; });
         d = ev.evaluate(toBrush(d.geometry), toBrush(mergeGeometries(balls)), ADDITION);
@@ -266,11 +309,11 @@ export function buildShell(phoi, o, onProgress = () => {}) {
   });
 
   onProgress('Tạo đế...');
-  const plateR = rmax + wall + t + 12;
-  const plate = new THREE.CylinderGeometry(plateR, plateR, 5, 96);
-  plate.translate(0, -2.5, 0);
-  const lipOut = radialSolid(prof, wall + t + 0.3 + 3, -1, 4.5);
-  const lipIn = radialSolid(prof, wall + t + 0.3, -2, 6);
+  let plate;
+  if (shape === 'conformal') { const plateR = rmax + wall + t + 12; plate = new THREE.CylinderGeometry(plateR, plateR, 5, 96); plate.translate(0, -2.5, 0); }
+  else plate = env(t + 12, -5, 0);
+  const lipOut = env(t + 0.3 + 3, -1, 4.5);
+  const lipIn = env(t + 0.3, -2, 6);
   const lip = ev.evaluate(toBrush(lipOut), toBrush(lipIn), SUBTRACTION);
   const baseP = ev.evaluate(toBrush(plate), toBrush(lip.geometry), ADDITION);
   parts.push({ kind: 'base', name: 'de', label: 'Đế', geometry: stripGeo(baseP.geometry), mid: 0 });
@@ -289,5 +332,9 @@ export function buildShell(phoi, o, onProgress = () => {}) {
   const vol = (g) => Math.abs(meshVolume(g.index ? g : g.toNonIndexed()));
   const divVol = parts.filter((p) => p.kind === 'divider').reduce((s, p) => s + vol(p.geometry), 0);
   const plasterMm3 = Math.max(0, vol(E0) - vol(inv) - vol(sprue) - divVol);
-  return { parts, plasterMm3, yTop, rmax, dims: { D: 2 * (rmax + wall + t), H: yPanel }, H, keyInfo };
+  const outW = shape === 'box' ? 2 * (hx + wall + t) : shape === 'cylinder' ? 2 * (Rc + t) : 2 * (rmax + wall + t);
+  const outD = shape === 'box' ? 2 * (hz + wall + t) : outW;
+  // thông tin để tự cắt/mua vỏ khi không in
+  const sheet = { shape, noPanels, innerW: shape === 'box' ? 2 * (hx + wall) : 2 * Rc, innerD: shape === 'box' ? 2 * (hz + wall) : 2 * Rc, height: yTop + 4, thickness: t };
+  return { parts, plasterMm3, yTop, rmax, dims: { D: Math.max(outW, outD), W: outW, P: outD, H: yPanel }, H, keyInfo, sheet };
 }

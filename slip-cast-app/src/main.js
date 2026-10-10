@@ -156,6 +156,7 @@ function toast(t, err) {
 
 // ---------- Nạp phôi ----------
 let repairNote = '';
+const shellMode0 = () => true; // tâm tối ưu áp dụng cho hộp bao
 
 // Gắn phôi đã làm sạch vào hệ thống
 function commitBase(g, name, rx0 = 0) {
@@ -296,7 +297,7 @@ function rebuildPhoi(refit) {
   const unit = num('unit') || 1;
   let shrink = num('shrink');
   if (!(shrink >= 0 && shrink <= 30)) { shrink = Math.min(30, Math.max(0, shrink || 0)); $('shrink').value = shrink; toast('Co ngót chỉ nhận từ 0 đến 30%. Đã đặt lại thành ' + shrink + '%.', true); }
-  phoi = orientPhoi(baseGeo, { unit, rx: rot.x, rz: rot.z, shrink: shrink / 100 });
+  phoi = orientPhoi(baseGeo, { unit, rx: rot.x, rz: rot.z, shrink: shrink / 100, center: shellMode0() && $('shShape').value === 'cylinder' && $('shCenter').checked ? 'circle' : 'bbox' });
   const st = phoiStats(phoi);
   faces = prepareFaces(phoi);
   const open = countOpenEdges(phoi);
@@ -735,6 +736,15 @@ $('shAuto').addEventListener('click', () => {
 $('shBuild').addEventListener('click', () => { clearTimeout(shellTimer); shellBuildNow(); });
 $('shShowDraft').addEventListener('change', () => { if (phoi && !shellRes) shellAnalyze(); });
 ['shWall', 'shShell', 'shDiv', 'shGap', 'shSpare', 'shPour', 'shBase', 'shKey', 'shKeyN', 'shKeyType'].forEach((id) => $(id).addEventListener('change', () => { shClamp(); clearShell(); shellAnalyze(); }));
+const shapeNote = () => {
+  const v = $('shShape').value;
+  $('shNoPanel').disabled = v === 'conformal'; $('shRibs').disabled = v === 'conformal';
+  if (v === 'conformal') $('shNoPanel').checked = false;
+  $('shShapeNote').textContent = { conformal: 'Vỏ cong ôm sát phôi: tốn ít thạch cao nhất nhưng vỏ cong in khó, buộc dây khó giữ.', cylinder: 'Vỏ thẳng đứng, in không cần đỡ, buộc dây chắc, có thể dùng ống có sẵn. Tốn thạch cao hơn khoảng 2 lần so với vỏ ôm phôi.', box: 'Các tấm phẳng, in nhanh hoặc tự cắt từ mica/gỗ. Hợp với phôi vuông vức, tốn nhiều thạch cao với phôi tròn.' }[v];
+};
+shapeNote();
+$('shShape').addEventListener('change', () => { shapeNote(); if (phoi) rebuildPhoi(false); });
+['shCenter', 'shRibs', 'shNoPanel'].forEach((id) => $(id).addEventListener('change', () => { if (id === 'shCenter') { if (phoi) rebuildPhoi(false); } else { clearShell(); shellAnalyze(); } }));
 $('shMinDraft').addEventListener('change', () => { clearShell(); shellAnalyze(); });
 
 function shellBuildNow() {
@@ -744,6 +754,7 @@ function shellBuildNow() {
   const o = {
     angles: [...shellAngles].sort((a, b) => a - b), wall: sh('shWall'), shell: sh('shShell'), divider: sh('shDiv'), gap: sh('shGap'),
     spare: sh('shSpare'), pourR: sh('shPour'), base: sh('shBase'), keyR: sh('shKey'), clear: sh('shGap'),
+    shape: $('shShape').value, ribs: $('shRibs').checked && $('shShape').value !== 'conformal', noPanels: $('shNoPanel').checked && $('shShape').value !== 'conformal',
     keyCount: Math.round(sh('shKeyN')), keyType: $('shKeyType').value === 'auto' ? (shellAngles.length <= 3 ? 'dome' : 'ball') : $('shKeyType').value,
   };
   const myVer = phoiVer, t0 = performance.now();
@@ -762,6 +773,16 @@ function shellBuildNow() {
 }
 
 const KIND_COLOR = { divider: 0xd0382c, base: 0x4fb6a0 };
+function sheetText(sh, o) {
+  if (!sh.noPanels) return '';
+  const t = fmt(sh.thickness, 1);
+  if (sh.shape === 'box') {
+    const w = sh.innerW, d = sh.innerD, h = sh.height;
+    return `<br><b>Tự làm vỏ hộp</b> bằng tấm dày ${t} mm, cao ${fmt(h)} mm, lòng trong <b>${fmt(w)} × ${fmt(d)} mm</b>: 2 tấm dài ${fmt(w + 2 * sh.thickness)} mm (trước, sau) và 2 tấm dài ${fmt(d)} mm (hai bên), ghép áp sát mép vách chia, đặt trong gờ của đế.`;
+  }
+  return `<br><b>Tự làm vỏ trụ</b>: ống hoặc dải tấm uốn tròn dày ${t} mm, cao ${fmt(sh.height)} mm, đường kính trong <b>${fmt(sh.innerW)} mm</b>, đặt trong gờ của đế.`;
+}
+
 function keyText(k, o) {
   if (!k || k.type === 'none') return (o.keyType === 'none' || !(o.keyR > 0)) ? '<br><span class="muted">Không có chốt định vị.</span>' : '<br><span class="warn">⚠ Thành thạch cao quá mỏng nên không đặt được chốt. Tăng “Độ dày thạch cao” (cần khoảng 14 mm trở lên) hoặc giảm bán kính chốt.</span>';
   const shrink = k.clamped ? ` <span class="warn">(đã thu nhỏ từ ${fmt(o.keyR, 1)} mm cho vừa thành thạch cao)</span>` : '';
@@ -792,9 +813,11 @@ function showShell(r, o) {
   fitShell(Math.max(r.dims.D / 2, r.dims.H / 2), r.dims.H / 2);
 
   const nP = r.parts.filter((p) => p.kind === 'panel').length, nD = r.parts.filter((p) => p.kind === 'divider').length;
+  const sz = r.sheet.shape === 'box' ? `${fmt(r.dims.W)} × ${fmt(r.dims.P)}` : `Ø${fmt(r.dims.D)}`;
+  const shapeName = { conformal: 'uốn theo phôi', cylinder: 'hình trụ tròn', box: 'hình hộp chữ nhật' }[r.sheet.shape];
   $('shInfo').innerHTML =
-    `<span class="sw" style="background:#4fb6a0"></span>1 đế · <span class="sw" style="background:#d0382c"></span>${nD} vách chia · <span class="sw" style="background:#e3b04b"></span>${nP} vỏ ngoài<br>` +
-    `Hộp bao Ø${fmt(r.dims.D)} × cao ${fmt(r.dims.H)} mm. Chia ${nD} mảnh thạch cao.` + keyText(r.keyInfo, o);
+    `<span class="sw" style="background:#4fb6a0"></span>1 đế · <span class="sw" style="background:#d0382c"></span>${nD} vách chia · <span class="sw" style="background:#e3b04b"></span>${nP ? nP + ' vỏ ngoài' : 'không in vỏ'}<br>` +
+    `Hộp bao ${shapeName}, ${sz} × cao ${fmt(r.dims.H)} mm. Chia ${nD} mảnh thạch cao.` + sheetText(r.sheet, o) + keyText(r.keyInfo, o);
   showShellPlaster();
   $('shDlAll').disabled = false;
   const box = $('shDlParts'); box.innerHTML = '';
@@ -803,7 +826,7 @@ function showShell(r, o) {
     b.addEventListener('click', () => download(new THREE.Mesh(p.geometry), p.name + '.stl'));
     box.appendChild(b);
   });
-  $('shGuide').innerHTML = `Cách dùng: in cuống + phôi đảo ngược, đế, vách và vỏ. Đặt phôi lên đế, cắm các vách chia vào sát phôi, ghép vỏ ngoài vào giữa các vách và buộc dây thun. Trét kín mối nối bằng đất sét, rồi đổ thạch cao tới ${fmt(r.yTop)} mm. Chốt định vị tự tạo trên thạch cao: nếu chọn bi rời thì đặt bi vào các lỗ khi ghép khuôn.`;
+  $('shGuide').innerHTML = `Cách dùng: in cuống + phôi đảo ngược, đế, vách${r.sheet.noPanels ? '' : ' và vỏ'}. Đặt phôi lên đế, cắm các vách chia vào sát phôi, ${r.sheet.noPanels ? 'dựng vỏ tự làm quanh các vách' : 'ghép vỏ ngoài vào giữa các vách'} và buộc dây thun${r.sheet.noPanels ? '' : ' (vỏ có gân giữ dây nếu bật)'}. Trét kín mối nối bằng đất sét, rồi đổ thạch cao tới ${fmt(r.yTop)} mm. Chốt định vị tự tạo trên thạch cao: nếu chọn bi rời thì đặt bi vào các lỗ khi ghép khuôn.`;
 }
 
 function showShellPlaster() {

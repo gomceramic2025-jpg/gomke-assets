@@ -60,8 +60,38 @@ export function cleanGeometry(geo) {
   return g;
 }
 
-// Xoay (độ) -> đổi đơn vị -> bù co ngót -> đặt đáy y=0, tâm x,z về 0.
-export function orientPhoi(base, { unit = 1, rx = 0, rz = 0, shrink = 0 }) {
+// Đường tròn nhỏ nhất chứa các điểm (x, z): dùng để đặt trục hộp trụ sao cho tốn ít thạch cao nhất.
+export function minEnclosingCircle(pts) {
+  // bao lồi (monotone chain) cho gọn
+  const P = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const p of P) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (let i = P.length - 1; i >= 0; i--) { const p = P[i]; while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+  const H = lo.slice(0, -1).concat(up.slice(0, -1));
+  const inC = (c, p) => Math.hypot(p[0] - c.x, p[1] - c.z) <= c.r + 1e-7;
+  const c2 = (a, b) => ({ x: (a[0] + b[0]) / 2, z: (a[1] + b[1]) / 2, r: Math.hypot(a[0] - b[0], a[1] - b[1]) / 2 });
+  const c3 = (a, b, c) => {
+    const bx = b[0] - a[0], bz = b[1] - a[1], cx = c[0] - a[0], cz = c[1] - a[1], d = 2 * (bx * cz - bz * cx);
+    if (Math.abs(d) < 1e-12) return null;
+    const ux = (cz * (bx * bx + bz * bz) - bz * (cx * cx + cz * cz)) / d, uz = (bx * (cx * cx + cz * cz) - cx * (bx * bx + bz * bz)) / d;
+    return { x: a[0] + ux, z: a[1] + uz, r: Math.hypot(ux, uz) };
+  };
+  let c = null;
+  for (let i = 0; i < H.length; i++) {
+    if (c && inC(c, H[i])) continue;
+    c = { x: H[i][0], z: H[i][1], r: 0 };
+    for (let j = 0; j < i; j++) {
+      if (inC(c, H[j])) continue;
+      c = c2(H[i], H[j]);
+      for (let k = 0; k < j; k++) { if (inC(c, H[k])) continue; c = c3(H[i], H[j], H[k]) || c; }
+    }
+  }
+  return c || { x: 0, z: 0, r: 0 };
+}
+
+// Xoay (độ) -> đổi đơn vị -> bù co ngót -> đặt đáy y=0, trục về tâm. center: 'bbox' (giữa khối bao) hoặc 'circle' (tâm đường tròn nhỏ nhất)
+export function orientPhoi(base, { unit = 1, rx = 0, rz = 0, shrink = 0, center = 'bbox' }) {
   const g = base.clone();
   const m = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rx * DEG, 0, rz * DEG));
   g.applyMatrix4(m);
@@ -69,7 +99,13 @@ export function orientPhoi(base, { unit = 1, rx = 0, rz = 0, shrink = 0 }) {
   g.scale(s, s, s);
   g.computeBoundingBox();
   const bb = g.boundingBox;
-  g.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
+  let cx = (bb.min.x + bb.max.x) / 2, cz = (bb.min.z + bb.max.z) / 2;
+  if (center === 'circle') {
+    const p = g.attributes.position, pts = new Array(p.count);
+    for (let i = 0; i < p.count; i++) pts[i] = [p.getX(i), p.getZ(i)];
+    const c = minEnclosingCircle(pts); cx = c.x; cz = c.z;
+  }
+  g.translate(-cx, -bb.min.y, -cz);
   g.computeBoundingBox();
   return g;
 }
