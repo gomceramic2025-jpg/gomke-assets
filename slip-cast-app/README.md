@@ -20,3 +20,4 @@ Sửa code: `npm install` rồi `node build.mjs` để đóng gói lại `index.
 - `keys.mjs`, `plaster_sim.mjs`, `keys_ui.mjs`: thử chốt định vị; `plaster_sim` mô phỏng đổ thạch cao bằng voxel để kiểm tra hai mảnh không thông nhau qua lỗ chốt và chốt lồi có hình thành.
 - `make_huge.mjs`, `huge_ui.mjs`: tạo file hơn 1 triệu mặt và thử tải lên (tự giảm mặt qua voxel, chọn độ chi tiết).
 - `threemf.mjs`, `threemf_ui.mjs`, `solid_node.mjs`, `solid_dbg.mjs`: đọc file 3MF (zip + XML, có component, phép biến đổi, đơn vị) và điền đầy vỏ rỗng hở thành khối đặc.
+- `snap_node.mjs`, `quality_ui.mjs`, `tri_quality.mjs`, `shell_clean.mjs`, `blow_dbg.mjs`: đo độ bám bề mặt gốc sau khi dựng lại lưới, chụp phôi để so mắt, tìm chỗ phép cắt hộp bao bị bùng nổ số mặt.

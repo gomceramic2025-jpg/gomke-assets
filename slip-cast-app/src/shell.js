@@ -236,7 +236,7 @@ export function buildShell(phoi, o, onProgress = () => {}) {
   // Khi đó thử lại với góc lệch rất nhỏ (< 0,2 độ), không ảnh hưởng thực tế.
   const makeDivider = (a, nudge) => {
     const ang = a + nudge;
-    let d = ex(slabSolid(ang, td + Math.abs(nudge) * 0.1, Lbig, 0, yPanel), dividerBase, INTERSECTION);
+    let d = ex(slabSolid(ang, td + Math.abs(nudge) * 0.1, Lbig, -1, yPanel + 1), dividerBase, INTERSECTION);
     d = ev.evaluate(toBrush(d.geometry), invCBrush, SUBTRACTION);
     d = ev.evaluate(toBrush(d.geometry), sprueCBrush, SUBTRACTION);
     if (keysOn) {

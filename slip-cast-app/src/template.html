@@ -81,9 +81,9 @@
     <label><span>Tự vá lưới hở khi tải file</span> <input type="checkbox" id="autoRepair" checked></label>
     <label><span>Tự đóng đáy và điền đầy vật rỗng hở</span> <input type="checkbox" id="autoSolid" checked></label>
     <label class="col">Độ chi tiết khi phải giảm mặt
-      <select id="detail" style="width:100%"><option value="96">Nhanh</option><option value="120" selected>Cân bằng</option><option value="160">Chi tiết</option><option value="210">Rất chi tiết (chậm, có thể mất cả phút)</option></select>
+      <select id="detail" style="width:100%"><option value="1.8">Nhanh (lưới thô khoảng 1,8 mm)</option><option value="1.3" selected>Cân bằng (khoảng 1,3 mm)</option><option value="0.9">Chi tiết (khoảng 0,9 mm)</option><option value="0.6">Rất chi tiết (0,6 mm, chậm, có thể mất cả phút)</option></select>
     </label>
-    <div class="muted">File quá 150 nghìn mặt hoặc có lưới hở sẽ được dựng lại gọn và kín. Càng chi tiết càng chậm và nặng.</div>
+    <div class="muted">File quá 150 nghìn mặt hoặc có lưới hở sẽ được dựng lại gọn và kín, rồi bám sát bề mặt gốc nên mặt phôi vẫn trơn. Số càng nhỏ càng giữ được chi tiết nhỏ nhưng càng chậm và nặng.</div>
     <label>Đơn vị file
       <select id="unit"><option value="1">mm</option><option value="10">cm</option><option value="1000">m</option><option value="25.4">inch</option></select>
     </label>

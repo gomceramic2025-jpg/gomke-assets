@@ -1,0 +1,16 @@
+import { chromium } from '/opt/node-tools/node_modules/playwright/index.mjs';
+const d = process.argv[2], file = process.argv[3], detail = process.argv[4] || '1.3';
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader','--no-sandbox'] });
+const p = await b.newPage({ viewport: { width: 1280, height: 800 } }); const errs = []; p.on('pageerror', e => errs.push(e.message));
+await p.goto('file://' + process.cwd() + '/artifact.html');
+const settle = () => p.waitForFunction(() => document.getElementById('busy').hidden && /Xong|lỗi/.test(document.getElementById('shStatus').textContent), null, { timeout: 300000 });
+await p.waitForTimeout(600); await settle();
+await p.selectOption('#detail', detail);
+const t0 = Date.now(); await p.setInputFiles('#file', file);
+await p.waitForFunction(() => /3MF|Không đọc|nghìn mặt/.test(document.getElementById('toast').textContent), null, { timeout: 300000 });
+await settle(); console.log('tổng', ((Date.now() - t0) / 1000).toFixed(1), 's |', (await p.innerText('#phoiInfo')).split('\n').slice(0, 3).join(' | ').slice(0, 220));
+await p.uncheck('#shShowPanel'); await p.uncheck('#shShowDraft').catch(() => {});
+await p.fill('#shExplode', '45'); await p.dispatchEvent('#shExplode', 'input'); await p.waitForTimeout(400);
+await p.evaluate(() => { const a = window.__app; a.camera.position.set(190, 130, 230); a.controls.target.set(0, 130, 0); a.controls.update(); });
+await p.waitForTimeout(400); await p.screenshot({ path: d + '/23_quality_' + detail + '.png', clip: { x: 340, y: 40, width: 940, height: 760 } });
+console.log('errors', errs); await b.close();

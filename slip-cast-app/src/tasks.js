@@ -30,7 +30,7 @@ let lastMold = null; // giữ lại để tạo hộp đổ sau đó (cần hìn
 export const handlers = {
   // Làm sạch lưới, tự vá nếu lưới hở, tự giảm mặt nếu quá nặng.
   // Cả hai việc đều dùng cách dựng lại bề mặt qua khối voxel (kín, gọn), nên file hàng triệu mặt vẫn xử lý được.
-  async prepare({ geo, buf3mf, autoRepair, solid = true, res, heavy = 150000 }, progress) {
+  async prepare({ geo, buf3mf, autoRepair, solid = true, res, voxel = 0, heavy = 150000 }, progress) {
     let objects = 0;
     if (buf3mf) { const r3 = await read3mf(buf3mf, progress); geo = { pos: r3.pos }; objects = r3.objects; }
     const raw = unpack(geo);
@@ -39,7 +39,7 @@ export const handlers = {
     if (trisRaw > 300000) {
       // Quá nặng để hàn đỉnh (tốn bộ nhớ): dựng lại thẳng từ các mặt gốc
       progress(`Đọc ${Math.round(trisRaw / 1000)} nghìn mặt, đang giảm mặt...`);
-      const r = repairMesh(raw, { res, solid, caps: buf3mf ? ['-z', '+z', '-y', '+y', '-x', '+x'] : undefined, onProgress: progress });
+      const r = repairMesh(raw, { res, voxel, solid, caps: buf3mf ? ['-z', '+z', '-y', '+y', '-x', '+x'] : undefined, onProgress: progress });
       g = r.geometry;
       info = { openBefore: -1, repaired: true, decimated: true, trisBefore: trisRaw, voxel: r.voxel, cap: r.cap };
     } else {
@@ -48,7 +48,7 @@ export const handlers = {
       const openBefore = countOpenEdges(g), tris = g.index.count / 3;
       info = { openBefore, repaired: false, decimated: false, trisBefore: trisRaw, voxel: 0 };
       if (tris > heavy || (openBefore > 0 && autoRepair)) {
-        const r = repairMesh(g, { res, solid, onProgress: progress });
+        const r = repairMesh(g, { res, voxel, solid, onProgress: progress });
         g = r.geometry;
         info.repaired = openBefore > 0; info.decimated = tris > heavy; info.voxel = r.voxel; info.cap = r.cap;
       }

@@ -2,6 +2,7 @@
 // Hố nhỏ hơn vài ô voxel được lấp tự động; chi tiết nhỏ hơn khoảng 1–2 voxel sẽ bị làm mượt.
 import * as THREE from 'three';
 import { meshVolume } from './mold.js';
+import { MeshBVH } from 'three-mesh-bvh';
 
 export function surfaceNets(occ, nx, ny, nz, vs, offsetFn, { blur = 2, smooth = 6, iso: isoLevel = 0.5 } = {}) {
   let f = Float32Array.from(occ);
@@ -80,6 +81,70 @@ function erode(a, nx, ny, nz) {
   return b;
 }
 
+// Kéo từng đỉnh về điểm gần nhất trên bề mặt gốc: xóa bậc thang của voxel, trả lại đúng hình dạng.
+// Chỉ kéo khi đủ gần và cùng hướng pháp tuyến (tránh dính sang mặt trong của vỏ mỏng); phần không có
+// bề mặt gốc (chỗ bịt khoang rỗng) được làm mượt riêng.
+function snapToSource(g, src, vs, onProgress) {
+  onProgress('Vá lưới: bám sát bề mặt gốc...');
+  const bvh = new MeshBVH(src, { indirect: true, maxLeafTris: 8 });
+  const P = g.attributes.position, N = g.attributes.normal, n = P.count;
+  const maxD = vs * 1.4, fixed = new Uint8Array(n), before = Float32Array.from(P.array);
+  const ray = new THREE.Ray(), org = new THREE.Vector3(), dir = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    dir.set(-N.getX(i), -N.getY(i), -N.getZ(i)); // bắn từ ngoài vào trong
+    org.set(P.getX(i) + N.getX(i) * maxD, P.getY(i) + N.getY(i) * maxD, P.getZ(i) + N.getZ(i) * maxD);
+    ray.origin.copy(org); ray.direction.copy(dir);
+    // chỉ nhận mặt quay ra phía tia (mặt ngoài của vỏ): mặt trong của vỏ mỏng không bị chọn nhầm
+    const h = bvh.raycastFirst(ray, THREE.FrontSide, 0, maxD * 2);
+    if (!h) continue;
+    P.setXYZ(i, h.point.x, h.point.y, h.point.z); fixed[i] = 1;
+  }
+  // Lượt 2: đỉnh mà tia không trúng (chỗ lõm, chân tai): lấy điểm gần nhất nếu mặt đó cùng hướng với pháp tuyến
+  const sp = src.attributes.position, six = src.index, tmp = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 };
+  const v = new THREE.Vector3(), A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3(), fn = new THREE.Vector3(), nv = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    if (fixed[i]) continue;
+    v.fromBufferAttribute(P, i);
+    const h = bvh.closestPointToPoint(v, tmp, 0, vs * 2);
+    if (!h) continue;
+    const t = h.faceIndex;
+    A.fromBufferAttribute(sp, six ? six.getX(3 * t) : 3 * t); B.fromBufferAttribute(sp, six ? six.getX(3 * t + 1) : 3 * t + 1); C.fromBufferAttribute(sp, six ? six.getX(3 * t + 2) : 3 * t + 2);
+    fn.subVectors(B, A).cross(C.sub(A)).normalize(); nv.fromBufferAttribute(N, i);
+    if (fn.dot(nv) < 0.5) continue;
+    P.setXYZ(i, h.point.x, h.point.y, h.point.z); fixed[i] = 1;
+  }
+  // Bỏ các đỉnh làm gập mặt (pháp tuyến đảo so với trước khi bám): gập mặt làm phép cắt khuôn sau này bị bùng nổ
+  const fidx = g.index.array, nf = fidx.length / 3, A2 = new THREE.Vector3(), B2 = new THREE.Vector3(), C2 = new THREE.Vector3(), n1 = new THREE.Vector3(), n0 = new THREE.Vector3();
+  const triN = (arr, a, b, c, out) => { A2.set(arr[a * 3], arr[a * 3 + 1], arr[a * 3 + 2]); B2.set(arr[b * 3], arr[b * 3 + 1], arr[b * 3 + 2]); C2.set(arr[c * 3], arr[c * 3 + 1], arr[c * 3 + 2]); out.subVectors(B2, A2).cross(C2.sub(A2)); return out.length(); };
+  for (let pass = 0; pass < 6; pass++) {
+    let reverted = 0;
+    for (let t = 0; t < nf; t++) {
+      const a = fidx[3 * t], b = fidx[3 * t + 1], c = fidx[3 * t + 2];
+      if (!fixed[a] && !fixed[b] && !fixed[c]) continue;
+      const l1 = triN(P.array, a, b, c, n1), l0 = triN(before, a, b, c, n0);
+      if (l0 < 1e-9) continue;
+      // gập mặt (đảo hướng) hoặc co dẹt gần như về 0 so với ban đầu
+      if (l1 < 1e-9 || n1.dot(n0) / (l1 * l0) < 0.35 || l1 < l0 * 0.08) {
+        for (const v of [a, b, c]) if (fixed[v]) { P.setXYZ(v, before[v * 3], before[v * 3 + 1], before[v * 3 + 2]); fixed[v] = 0; reverted++; }
+      }
+    }
+    if (!reverted) break;
+  }
+  // làm mượt phần chưa bám được (giữ nguyên các đỉnh đã bám)
+  const idx = g.index.array, nb = Array.from({ length: n }, () => []);
+  for (let t = 0; t < idx.length; t += 3) for (let e = 0; e < 3; e++) nb[idx[t + e]].push(idx[t + (e + 1) % 3], idx[t + (e + 2) % 3]);
+  for (let it = 0; it < 30; it++) {
+    for (let i = 0; i < n; i++) {
+      if (fixed[i] || !nb[i].length) continue;
+      let x = 0, y = 0, z = 0; for (const j of nb[i]) { x += P.getX(j); y += P.getY(j); z += P.getZ(j); }
+      const k = nb[i].length; P.setXYZ(i, P.getX(i) * 0.4 + 0.6 * x / k, P.getY(i) * 0.4 + 0.6 * y / k, P.getZ(i) * 0.4 + 0.6 * z / k);
+    }
+  }
+  g.computeVertexNormals();
+  let c = 0; for (let i = 0; i < n; i++) c += fixed[i];
+  return c;
+}
+
 // Điền đầy theo độ che chắn: ô nào bị vỏ chắn ở ít nhất `need` trong 6 hướng (±x, ±y, ±z) thì coi là bên trong.
 // Dùng cho vỏ rỗng hở một hai phía (mũ, cốc, vòm có cửa) mà cách đóng đáy phẳng không bịt kín được.
 function occlusionFill(wall, nx, ny, nz, need) {
@@ -100,9 +165,10 @@ function occlusionFill(wall, nx, ny, nz, need) {
 }
 
 // geo: BufferGeometry (position + index tùy chọn). Trả về { geometry, voxel, close } hoặc ném lỗi.
-export function repairMesh(geo, { res = 120, inset = 0.62, solid = false, caps = ['-z', '-y', '+z', '+y', '-x', '+x'], onProgress = () => {} } = {}) {
+export function repairMesh(geo, { res = 120, voxel = 0, snap = true, inset = 0.62, solid = false, caps = ['-z', '-y', '+z', '+y', '-x', '+x'], onProgress = () => {} } = {}) {
   const p = geo.attributes.position, ix = geo.index, nt = ix ? ix.count / 3 : p.count / 3;
   const bb = new THREE.Box3().setFromBufferAttribute(p), size = bb.getSize(new THREE.Vector3());
+  if (voxel > 0) res = Math.min(320, Math.max(80, Math.max(size.x, size.y, size.z) / voxel));
   const vs = Math.max(size.x, size.y, size.z) / res, pad = 8;
   const nx = Math.ceil(size.x / vs) + 2 * pad, ny = Math.ceil(size.y / vs) + 2 * pad, nz = Math.ceil(size.z / vs) + 2 * pad;
   const ox = bb.min.x - pad * vs, oy = bb.min.y - pad * vs, oz = bb.min.z - pad * vs;
@@ -128,9 +194,12 @@ export function repairMesh(geo, { res = 120, inset = 0.62, solid = false, caps =
     // Mặt voxel luôn nở ra khoảng nửa ô; thụt vào theo pháp tuyến để thể tích khớp bản gốc
     g.computeVertexNormals();
     const P = g.attributes.position, N = g.attributes.normal;
-    for (let i = 0; i < P.count; i++) P.setXYZ(i, P.getX(i) - N.getX(i) * inset * vs, P.getY(i) - N.getY(i) * inset * vs, P.getZ(i) - N.getZ(i) * inset * vs);
+    const ins = inset;
+    for (let i = 0; i < P.count; i++) P.setXYZ(i, P.getX(i) - N.getX(i) * ins * vs, P.getY(i) - N.getY(i) * ins * vs, P.getZ(i) - N.getZ(i) * ins * vs);
     g.computeVertexNormals();
-    return { geometry: g, voxel: vs, close, cap };
+    let snapped = 0;
+    if (snap) snapped = snapToSource(g, geo, vs, onProgress);
+    return { geometry: g, voxel: vs, close, cap, snapped: snapped / P.count };
   };
   const attempts = [{ cap: null }, ...(solid ? caps.map((c) => ({ cap: c })) : []), ...(solid ? [{ cap: null, occ: true }] : [])];
   const dims = [nx, ny, nz];

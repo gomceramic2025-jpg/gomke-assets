@@ -21,12 +21,12 @@ console.log('   phôi:', (await p.innerText('#phoiInfo')).replace(/\n/g, ' | ').
 console.log('   hộp bao:', await p.textContent('#shStatus'), '|', (await p.innerText('#shDraft')).split('\n')[0], '| lag tối đa', Math.round(await p.evaluate(() => window.__lag)), 'ms');
 await p.screenshot({ path: d + '/18_repaired.png' });
 // 3. hủy giữa chừng
-await p.click('#shBuild'); await p.waitForTimeout(600);
+await p.click('#shBuild'); await p.waitForTimeout(250);
 const busyShown = await p.evaluate(() => !document.getElementById('busy').hidden);
 await p.click('#busyCancel'); await p.waitForTimeout(300);
 console.log('3. đang chạy có hiện thanh tiến trình:', busyShown, '| sau Hủy: busy ẩn =', await p.evaluate(() => document.getElementById('busy').hidden), '| nút tạo bật lại =', !(await p.isDisabled('#shBuild')), '| toast:', await p.textContent('#toast'));
 // 4. đổi phôi giữa lúc đang tạo: chỉ còn kết quả của phôi mới
-await p.click('#shBuild'); await p.waitForTimeout(500); await p.click('#demo'); await p.waitForTimeout(1200); await settle(p);
+await p.click('#shBuild'); await p.waitForTimeout(250); await p.click('#demo'); await p.waitForTimeout(1200); await settle(p);
 console.log('4. đổi phôi giữa chừng:', await p.textContent('#fileName'), '|', await p.textContent('#shStatus'), '|', (await p.innerText('#shInfo')).split('\n')[1]);
 console.log('errors', errs); await p.close();
 

@@ -181,17 +181,17 @@ function setBase(geo, name) {
 
 // File người dùng: làm sạch và tự vá lưới hở trong worker
 async function setBaseFromFile(geo, name, buf3mf) {
-  const res = parseInt($('detail').value) || 120;
+  const voxel = parseFloat($('detail').value) || 1.3;
   let payload, transfer;
   if (buf3mf) {
-    payload = { buf3mf: new Uint8Array(buf3mf), autoRepair: $('autoRepair').checked, solid: $('autoSolid').checked, res };
+    payload = { buf3mf: new Uint8Array(buf3mf), autoRepair: $('autoRepair').checked, solid: $('autoSolid').checked, voxel };
     transfer = [buf3mf];
   } else {
     const pc = geo.attributes && geo.attributes.position ? geo.attributes.position.count : 0;
     if (pc < 12) throw new Error('file không có mặt tam giác nào (rỗng hoặc sai định dạng)');
     if (pc / 3 > 6000000) throw new Error('mô hình có ' + (pc / 3000000).toFixed(1) + ' triệu mặt, vượt quá khả năng của trình duyệt (tối đa 6 triệu). Hãy giảm mặt bằng phần mềm 3D rồi tải lại');
     const raw = geo.attributes.position.array; // chuyển thẳng sang worker, không sao chép (file nặng rất tốn bộ nhớ)
-    payload = { geo: { pos: raw }, autoRepair: $('autoRepair').checked, solid: $('autoSolid').checked, res };
+    payload = { geo: { pos: raw }, autoRepair: $('autoRepair').checked, solid: $('autoSolid').checked, voxel };
     transfer = [raw.buffer];
   }
   const r = await runTask('prepare', payload, 'Đang đọc và làm sạch lưới...', transfer);
@@ -210,7 +210,7 @@ async function setBaseFromFile(geo, name, buf3mf) {
   }
   if (i.decimated) notes.push(`Mô hình ${k(i.trisBefore)} mặt quá nặng nên đã được giảm xuống còn ${k(i.trisAfter)} mặt.`);
   if (i.repaired && i.openBefore > 0) notes.push(`Đã tự vá lưới hở: ${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}.`);
-  if (i.voxel) notes.push(`Độ phân giải khoảng ${fmt(i.voxel, 1)} mm, chi tiết nhỏ hơn mức này bị làm mượt (chọn “Chi tiết” hoặc “Rất chi tiết” nếu cần giữ nhiều hơn).`);
+  if (i.voxel) notes.push(`Lưới mới có ô khoảng ${fmt(i.voxel, 1)} mm và đã bám sát bề mặt gốc. Chi tiết nhỏ hơn mức này có thể bị mất (chọn “Chi tiết” hoặc “Rất chi tiết” nếu cần giữ nhiều hơn).`);
   repairNote = notes.filter((x) => !x.startsWith('Đã đọc file 3MF')).join(' ');
   g.computeVertexNormals();
   commitBase(g, name, buf3mf ? 270 : 0);
@@ -349,7 +349,7 @@ function drawPhoi() {
     for (let v = 0; v < 3; v++) col.set(c, (3 * t + v) * 3);
   }
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  phoiMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, flatShading: true }));
+  phoiMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, flatShading: false }));
   scene.add(phoiMesh);
   applyVisibility();
 }
@@ -688,7 +688,7 @@ function makePositiveMesh(inv) {
     for (let v = 0; v < 3; v++) col.set(c, (3 * t + v) * 3);
   }
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, flatShading: true }));
+  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, flatShading: false }));
   m.userData = { kind: 'phoi', mid: 0 };
   return m;
 }
