@@ -71,7 +71,7 @@
   <section id="secPhoi">
     <h2>1. Phôi</h2>
     <div class="row">
-      <button id="pick">Tải file STL / OBJ</button>
+      <button id="pick">Tải file STL / OBJ / 3MF</button>
       <button id="demoTwist">Bình xoắn mẫu</button>
       <button id="demo">Bình trơn</button>
       <input type="file" id="file">
@@ -79,8 +79,9 @@
     <div class="row"><button id="dlSample">Tải file STL mẫu về máy</button></div>
     <div class="muted" id="fileName">Chưa có phôi. Có thể kéo thả file vào khung 3D.</div>
     <label><span>Tự vá lưới hở khi tải file</span> <input type="checkbox" id="autoRepair" checked></label>
-    <label>Độ chi tiết khi phải giảm mặt
-      <select id="detail" style="width:auto"><option value="96">Nhanh</option><option value="120" selected>Cân bằng</option><option value="160">Chi tiết</option><option value="210">Rất chi tiết (chậm, có thể mất cả phút)</option></select>
+    <label><span>Tự đóng đáy và điền đầy vật rỗng hở</span> <input type="checkbox" id="autoSolid" checked></label>
+    <label class="col">Độ chi tiết khi phải giảm mặt
+      <select id="detail" style="width:100%"><option value="96">Nhanh</option><option value="120" selected>Cân bằng</option><option value="160">Chi tiết</option><option value="210">Rất chi tiết (chậm, có thể mất cả phút)</option></select>
     </label>
     <div class="muted">File quá 150 nghìn mặt hoặc có lưới hở sẽ được dựng lại gọn và kín. Càng chi tiết càng chậm và nặng.</div>
     <label>Đơn vị file

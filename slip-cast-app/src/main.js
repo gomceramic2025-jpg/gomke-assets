@@ -112,10 +112,8 @@ function getWorker() {
 }
 
 function runDirect(a) {
-  try {
-    const { result } = handlers[a.type](a.payload, setBusyText);
-    finishTask(a.id, true, result);
-  } catch (e) { finishTask(a.id, false, e); }
+  Promise.resolve().then(() => handlers[a.type](a.payload, setBusyText))
+    .then(({ result }) => finishTask(a.id, true, result), (e) => finishTask(a.id, false, e));
 }
 
 // Việc mới luôn thay thế việc cũ đang chạy (ví dụ đổi phôi giữa lúc đang tạo hộp bao)
@@ -160,12 +158,12 @@ function toast(t, err) {
 let repairNote = '';
 
 // Gắn phôi đã làm sạch vào hệ thống
-function commitBase(g, name) {
+function commitBase(g, name, rx0 = 0) {
   g.computeBoundingBox();
   const bs = g.boundingBox.getSize(new THREE.Vector3());
   if (![bs.x, bs.y, bs.z].every((v) => isFinite(v) && v > 0)) throw new Error('kích thước mô hình không hợp lệ');
   baseGeo = g;
-  rot.x = 0; rot.z = 0;
+  rot.x = rx0; rot.z = 0;
   pourManual = false;
   $('fileName').textContent = name;
   rebuildPhoi(true);
@@ -182,33 +180,56 @@ function setBase(geo, name) {
 }
 
 // File người dùng: làm sạch và tự vá lưới hở trong worker
-async function setBaseFromFile(geo, name) {
-  const pc = geo.attributes && geo.attributes.position ? geo.attributes.position.count : 0;
-  if (pc < 12) throw new Error('file không có mặt tam giác nào (rỗng hoặc sai định dạng)');
-  if (pc / 3 > 6000000) throw new Error('mô hình có ' + (pc / 3000000).toFixed(1) + ' triệu mặt, vượt quá khả năng của trình duyệt (tối đa 6 triệu). Hãy giảm mặt bằng phần mềm 3D rồi tải lại');
+async function setBaseFromFile(geo, name, buf3mf) {
   const res = parseInt($('detail').value) || 120;
-  const raw = geo.attributes.position.array; // chuyển thẳng sang worker, không sao chép (file nặng rất tốn bộ nhớ)
-  const r = await runTask('prepare', { geo: { pos: raw }, autoRepair: $('autoRepair').checked, res }, 'Đang đọc và làm sạch lưới...', [raw.buffer]);
+  let payload, transfer;
+  if (buf3mf) {
+    payload = { buf3mf: new Uint8Array(buf3mf), autoRepair: $('autoRepair').checked, solid: $('autoSolid').checked, res };
+    transfer = [buf3mf];
+  } else {
+    const pc = geo.attributes && geo.attributes.position ? geo.attributes.position.count : 0;
+    if (pc < 12) throw new Error('file không có mặt tam giác nào (rỗng hoặc sai định dạng)');
+    if (pc / 3 > 6000000) throw new Error('mô hình có ' + (pc / 3000000).toFixed(1) + ' triệu mặt, vượt quá khả năng của trình duyệt (tối đa 6 triệu). Hãy giảm mặt bằng phần mềm 3D rồi tải lại');
+    const raw = geo.attributes.position.array; // chuyển thẳng sang worker, không sao chép (file nặng rất tốn bộ nhớ)
+    payload = { geo: { pos: raw }, autoRepair: $('autoRepair').checked, solid: $('autoSolid').checked, res };
+    transfer = [raw.buffer];
+  }
+  const r = await runTask('prepare', payload, 'Đang đọc và làm sạch lưới...', transfer);
   const g = unpack(r.geo);
   const tris = g.index ? g.index.count / 3 : 0;
   if (tris < 4) throw new Error('mô hình không có đủ mặt để dựng khối');
   const i = r.info, k = (n) => fmt(Math.round(n / 1000)) + ' nghìn';
   const notes = [];
+  if (buf3mf) {
+    $('unit').value = '1'; // 3MF đã được quy đổi sang mm
+    notes.push('Đã đọc file 3MF' + (i.objects > 1 ? ` (${i.objects} vật thể, đã gộp làm một)` : '') + '. 3MF để trục Z hướng lên nên app đã tự xoay cho đứng; nếu bị ngược thì dùng nút “Xoay quanh X 90°”.');
+  }
+  if (i.cap) {
+    const where = { '-z': 'đóng đáy phẳng phía dưới (trục Z)', '+z': 'đóng đáy phẳng phía trên (trục Z)', '-y': 'đóng đáy phẳng phía dưới (trục Y)', '+y': 'đóng đáy phẳng phía trên (trục Y)', '-x': 'đóng một đầu theo trục X âm', '+x': 'đóng một đầu theo trục X dương', 'che-chan': 'lấp các khoang và cửa hở' }[i.cap] || 'điền đầy';
+    notes.push(`Mô hình là vỏ rỗng hở nên app đã ${where} và điền đầy thành khối đặc. Hãy xem lại hình dạng trước khi tạo khuôn.`);
+  }
   if (i.decimated) notes.push(`Mô hình ${k(i.trisBefore)} mặt quá nặng nên đã được giảm xuống còn ${k(i.trisAfter)} mặt.`);
   if (i.repaired && i.openBefore > 0) notes.push(`Đã tự vá lưới hở: ${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}.`);
   if (i.voxel) notes.push(`Độ phân giải khoảng ${fmt(i.voxel, 1)} mm, chi tiết nhỏ hơn mức này bị làm mượt (chọn “Chi tiết” hoặc “Rất chi tiết” nếu cần giữ nhiều hơn).`);
-  repairNote = notes.join(' ');
+  repairNote = notes.filter((x) => !x.startsWith('Đã đọc file 3MF')).join(' ');
   g.computeVertexNormals();
-  commitBase(g, name);
-  if (notes.length) toast(repairNote, i.openAfter > 0);
+  commitBase(g, name, buf3mf ? 270 : 0);
+  if (notes.length) toast(notes.join(' '), i.openAfter > 0);
 }
 
 function loadFile(file) {
   const ext = file.name.split('.').pop().toLowerCase();
-  if (ext !== 'stl' && ext !== 'obj') return toast('Chỉ nhận file .stl hoặc .obj. File vừa chọn: ' + file.name, true);
+  if (!['stl', 'obj', '3mf'].includes(ext)) return toast('Chỉ nhận file .stl, .obj hoặc .3mf. File vừa chọn: ' + file.name, true);
+  const fail = (e) => {
+    if (isCancelled(e)) return;
+    const m = /DataView|bounds|Offset|Invalid|Unexpected/i.test(e.message) ? 'file không đúng định dạng hoặc bị hỏng' : e.message;
+    toast('Không đọc được file “' + file.name + '”: ' + m + '. Phôi cũ được giữ nguyên.', true);
+  };
   const reader = new FileReader();
+  reader.onerror = () => toast('Không mở được file “' + file.name + '”.', true);
   reader.onload = async () => {
     try {
+      if (ext === '3mf') return await setBaseFromFile(null, file.name, reader.result);
       let geo;
       if (ext === 'stl') geo = new STLLoader().parse(reader.result);
       else {
@@ -218,13 +239,8 @@ function loadFile(file) {
         geo = mergeGeos(gs);
       }
       await setBaseFromFile(geo, file.name);
-    } catch (e) {
-      if (isCancelled(e)) return;
-      const m = /DataView|bounds|Offset|Invalid|Unexpected/i.test(e.message) ? 'file không đúng định dạng STL/OBJ hoặc bị hỏng' : e.message;
-      toast('Không đọc được file “' + file.name + '”: ' + m + '. Phôi cũ được giữ nguyên.', true);
-    }
+    } catch (e) { fail(e); }
   };
-  reader.onerror = () => toast('Không mở được file “' + file.name + '”.', true);
   if (ext === 'obj') reader.readAsText(file); else reader.readAsArrayBuffer(file);
 }
 

@@ -80,8 +80,27 @@ function erode(a, nx, ny, nz) {
   return b;
 }
 
+// Điền đầy theo độ che chắn: ô nào bị vỏ chắn ở ít nhất `need` trong 6 hướng (±x, ±y, ±z) thì coi là bên trong.
+// Dùng cho vỏ rỗng hở một hai phía (mũ, cốc, vòm có cửa) mà cách đóng đáy phẳng không bịt kín được.
+function occlusionFill(wall, nx, ny, nz, need) {
+  const cnt = new Uint8Array(wall.length), st = [1, nx, nx * ny], len = [nx, ny, nz];
+  for (let ax = 0; ax < 3; ax++) {
+    const s1 = st[ax], n1 = len[ax], o1 = [0, 1, 2].filter((a) => a !== ax);
+    for (let b = 0; b < len[o1[0]]; b++) for (let c = 0; c < len[o1[1]]; c++) {
+      const base = b * st[o1[0]] + c * st[o1[1]];
+      let seen = false;
+      for (let t = 0; t < n1; t++) { const q = base + t * s1; if (seen) cnt[q]++; if (wall[q]) seen = true; }
+      seen = false;
+      for (let t = n1 - 1; t >= 0; t--) { const q = base + t * s1; if (seen) cnt[q]++; if (wall[q]) seen = true; }
+    }
+  }
+  const occ = new Uint8Array(wall.length);
+  for (let q = 0; q < occ.length; q++) occ[q] = wall[q] || cnt[q] >= need ? 1 : 0;
+  return occ;
+}
+
 // geo: BufferGeometry (position + index tùy chọn). Trả về { geometry, voxel, close } hoặc ném lỗi.
-export function repairMesh(geo, { res = 120, inset = 0.62, onProgress = () => {} } = {}) {
+export function repairMesh(geo, { res = 120, inset = 0.62, solid = false, caps = ['-z', '-y', '+z', '+y', '-x', '+x'], onProgress = () => {} } = {}) {
   const p = geo.attributes.position, ix = geo.index, nt = ix ? ix.count / 3 : p.count / 3;
   const bb = new THREE.Box3().setFromBufferAttribute(p), size = bb.getSize(new THREE.Vector3());
   const vs = Math.max(size.x, size.y, size.z) / res, pad = 8;
@@ -100,24 +119,9 @@ export function repairMesh(geo, { res = 120, inset = 0.62, onProgress = () => {}
       if (i >= 0 && i < nx && j >= 0 && j < ny && k >= 0 && k < nz) surf[idx(i, j, k)] = 1;
     }
   }
-  // thử tăng dần độ "đóng" cho tới khi phần trong không còn rò ra ngoài
-  for (const close of [1, 2, 4, 6]) {
-    onProgress(`Vá lưới: lấp lỗ (mức ${close})...`);
-    let barrier = surf;
-    for (let c = 0; c < close; c++) barrier = dilate(barrier, nx, ny, nz);
-    const ext = new Uint8Array(nx * ny * nz), stack = new Int32Array(nx * ny * nz);
-    let sp = 0; ext[0] = 1; stack[sp++] = 0;
-    while (sp) {
-      const q = stack[--sp], i = q % nx, j = ((q / nx) | 0) % ny, k = (q / (nx * ny)) | 0;
-      const push = (r) => { if (!ext[r] && !barrier[r]) { ext[r] = 1; stack[sp++] = r; } };
-      if (i > 0) push(q - 1); if (i < nx - 1) push(q + 1); if (j > 0) push(q - nx); if (j < ny - 1) push(q + nx); if (k > 0) push(q - nx * ny); if (k < nz - 1) push(q + nx * ny);
-    }
-    let inner = 0, total = 0;
-    for (let q = 0; q < ext.length; q++) { if (!ext[q]) { total++; if (!barrier[q]) inner++; } }
-    if (inner < 20) continue; // vẫn rò: tăng mức đóng
-    let occ = new Uint8Array(ext.length);
-    for (let q = 0; q < ext.length; q++) occ[q] = ext[q] ? 0 : 1;
-    for (let c = 0; c < close; c++) occ = erode(occ, nx, ny, nz);
+  // Thử lần lượt: không đóng đáy, rồi (nếu cho phép) đóng đáy phẳng ở từng phía để điền đầy vật rỗng hở một đầu.
+  // Với mỗi cách, tăng dần độ "đóng" cho tới khi phần trong không còn rò ra ngoài.
+  const finish = (occ, close, cap) => {
     onProgress('Vá lưới: dựng lại bề mặt kín...');
     const g = surfaceNets(occ, nx, ny, nz, vs, (i, j, k) => [ox + i * vs, oy + j * vs, oz + k * vs], { blur: 1, smooth: 3 });
     if (meshVolume(g) < 0) { const a = g.index.array; for (let i = 0; i < a.length; i += 3) { const t = a[i + 1]; a[i + 1] = a[i + 2]; a[i + 2] = t; } g.index.needsUpdate = true; }
@@ -126,7 +130,45 @@ export function repairMesh(geo, { res = 120, inset = 0.62, onProgress = () => {}
     const P = g.attributes.position, N = g.attributes.normal;
     for (let i = 0; i < P.count; i++) P.setXYZ(i, P.getX(i) - N.getX(i) * inset * vs, P.getY(i) - N.getY(i) * inset * vs, P.getZ(i) - N.getZ(i) * inset * vs);
     g.computeVertexNormals();
-    return { geometry: g, voxel: vs, close };
+    return { geometry: g, voxel: vs, close, cap };
+  };
+  const attempts = [{ cap: null }, ...(solid ? caps.map((c) => ({ cap: c })) : []), ...(solid ? [{ cap: null, occ: true }] : [])];
+  const dims = [nx, ny, nz];
+  const bboxVox = (nx - 2 * pad) * (ny - 2 * pad) * (nz - 2 * pad);
+  for (const { cap, occ: byOcc } of attempts) {
+    for (const close of byOcc ? [1] : [1, 2, 4, 6]) {
+      onProgress(byOcc ? 'Vá lưới: điền đầy theo độ che chắn...' : cap ? `Vá lưới: đóng đáy ${cap} và điền đầy (mức ${close})...` : `Vá lưới: lấp lỗ (mức ${close})...`);
+      let barrier = surf;
+      for (let c = 0; c < close; c++) barrier = dilate(barrier, nx, ny, nz);
+      if (byOcc) {
+        let occ = occlusionFill(barrier, nx, ny, nz, 4);
+        for (let c = 0; c < close; c++) occ = erode(occ, nx, ny, nz);
+        return finish(occ, close, 'che-chan');
+      }
+      if (cap) {
+        barrier = Uint8Array.from(barrier);
+        const ax = 'xyz'.indexOf(cap[1]), layer = cap[0] === '-' ? pad - 1 : dims[ax] - pad;
+        for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if ((ax === 0 ? i : ax === 1 ? j : k) === layer) barrier[idx(i, j, k)] = 1;
+      }
+      const ext = new Uint8Array(nx * ny * nz), stack = new Int32Array(nx * ny * nz);
+      let sp = 0;
+      // hạt giống: mọi ô nằm trên mặt biên của lưới (tấm đáy có thể chia lưới thành hai phía)
+      for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        if (i === 0 || j === 0 || k === 0 || i === nx - 1 || j === ny - 1 || k === nz - 1) { const q = idx(i, j, k); if (!barrier[q] && !ext[q]) { ext[q] = 1; stack[sp++] = q; } }
+      }
+      while (sp) {
+        const q = stack[--sp], i = q % nx, j = ((q / nx) | 0) % ny, k = (q / (nx * ny)) | 0;
+        const push = (r) => { if (!ext[r] && !barrier[r]) { ext[r] = 1; stack[sp++] = r; } };
+        if (i > 0) push(q - 1); if (i < nx - 1) push(q + 1); if (j > 0) push(q - nx); if (j < ny - 1) push(q + nx); if (k > 0) push(q - nx * ny); if (k < nz - 1) push(q + nx * ny);
+      }
+      let inner = 0;
+      for (let q = 0; q < ext.length; q++) if (!ext[q] && !barrier[q]) inner++;
+      if (inner < Math.max(20, cap ? bboxVox * 0.004 : 0)) continue; // vẫn rò: tăng mức đóng / thử cách khác
+      let occ = new Uint8Array(ext.length);
+      for (let q = 0; q < ext.length; q++) occ[q] = ext[q] ? 0 : 1;
+      for (let c = 0; c < close; c++) occ = erode(occ, nx, ny, nz);
+      return finish(occ, close, cap);
+    }
   }
-  throw new Error('Không vá được lưới: bề mặt có lỗ quá lớn hoặc không bao kín một khối. Hãy sửa trong Blender/Meshmixer (Make Manifold)');
+  throw new Error(solid ? 'Không dựng được khối đặc: mô hình không bao kín một khối kể cả khi đóng đáy phẳng. Hãy sửa trong Blender/Meshmixer (Make Manifold)' : 'Không vá được lưới: bề mặt có lỗ quá lớn hoặc là vỏ rỗng hở. Bật “Tự đóng đáy và điền đầy vật rỗng hở” hoặc sửa trong Blender/Meshmixer');
 }

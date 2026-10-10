@@ -1,0 +1,15 @@
+import { chromium } from '/opt/node-tools/node_modules/playwright/index.mjs';
+const d = process.argv[2], file = process.argv[3];
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader','--no-sandbox'] });
+const p = await b.newPage({ viewport: { width: 1280, height: 800 } }); const errs = []; p.on('pageerror', e => errs.push(e.message));
+await p.goto('file://' + process.cwd() + '/artifact.html');
+const settle = () => p.waitForFunction(() => document.getElementById('busy').hidden && /Xong|lỗi/.test(document.getElementById('shStatus').textContent), null, { timeout: 300000 });
+await p.waitForTimeout(600); await settle();
+const t0 = Date.now();
+await p.setInputFiles('#file', file);
+await p.waitForFunction(() => /3MF|Không đọc/.test(document.getElementById('toast').textContent), null, { timeout: 300000 });
+console.log('toast sau', ((Date.now() - t0) / 1000).toFixed(1), 's:', await p.textContent('#toast'));
+await settle(); console.log('hộp bao:', await p.textContent('#shStatus'), '| tổng', ((Date.now() - t0) / 1000).toFixed(1), 's');
+console.log((await p.innerText('#phoiInfo')).replace(/\n/g, ' | ').slice(0, 230));
+console.log((await p.innerText('#shDraft')).split('\n').slice(0, 2).join(' | '));
+await p.screenshot({ path: d + '/22_3mf.png' }); console.log('errors', errs); await b.close();
