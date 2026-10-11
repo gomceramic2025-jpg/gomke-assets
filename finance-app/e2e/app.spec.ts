@@ -267,7 +267,9 @@ test('báo cáo: xuất CSV có BOM và chống công thức; mở được 3 lo
   expect((await x.suggestedFilename())).toMatch(/\.xlsx$/);
 });
 
-test('bố cục: không cuộn ngang; điều hướng phù hợp màn hình; mọi trang có tiêu đề và mở được', async ({ page }) => {
+test('bố cục: không cuộn ngang (kể cả khi có dữ liệu mẫu); điều hướng phù hợp màn hình; mọi trang có tiêu đề và mở được', async ({ page }) => {
+  await go(page, 'cai-dat');
+  await page.getByRole('button', { name: 'Nạp dữ liệu mẫu để thử' }).click();
   const routes = ['tong-quan', 'giao-dich', 'nhap-sao-ke', 'ngan-sach', 'muc-tieu', 'tai-san', 'bao-cao', 'dong-bo', 'sao-luu', 'cai-dat', 'tro-ly', 'dang-nhap'];
   for (const r of routes) {
     await go(page, r);
