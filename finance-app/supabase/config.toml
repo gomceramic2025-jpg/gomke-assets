@@ -1,0 +1,15 @@
+# Mẫu cấu hình cho Supabase CLI (local). Với dự án trên cloud, đặt các mục tương đương trong Dashboard (xem docs/SETUP_SUPABASE.md).
+[auth]
+enable_signup = true   # Google OAuth cần bật; người lạ bị chặn bởi hook bên dưới + RLS (is_owner)
+
+[auth.external.google]
+enabled = true
+client_id = "env(GOOGLE_CLIENT_ID)"
+secret = "env(GOOGLE_CLIENT_SECRET)"   # đặt trong môi trường, KHÔNG commit giá trị thật
+
+[auth.hook.before_user_created]
+enabled = true
+uri = "pg-functions://postgres/public/hook_before_user_created"
+
+[functions.ai-proxy]
+verify_jwt = true
