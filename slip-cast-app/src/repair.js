@@ -165,11 +165,15 @@ function occlusionFill(wall, nx, ny, nz, need) {
 }
 
 // geo: BufferGeometry (position + index tùy chọn). Trả về { geometry, voxel, close } hoặc ném lỗi.
-export function repairMesh(geo, { res = 120, voxel = 0, snap = true, inset = 0.62, solid = false, caps = ['-z', '-y', '+z', '+y', '-x', '+x'], onProgress = () => {} } = {}) {
+export function repairMesh(geo, { res = 120, voxel = 0, budget = 0, snap = true, inset = 0.62, solid = false, caps = ['-z', '-y', '+z', '+y', '-x', '+x'], onProgress = () => {} } = {}) {
   const p = geo.attributes.position, ix = geo.index, nt = ix ? ix.count / 3 : p.count / 3;
   const bb = new THREE.Box3().setFromBufferAttribute(p), size = bb.getSize(new THREE.Vector3());
-  if (voxel > 0) res = Math.min(320, Math.max(80, Math.max(size.x, size.y, size.z) / voxel));
-  const vs = Math.max(size.x, size.y, size.z) / res, pad = 8;
+  // Ô voxel theo mm; không còn trần cứng 320 ô. Chỉ tăng ô khi tổng số ô vượt ngân sách bộ nhớ của thiết bị.
+  const maxDim = Math.max(size.x, size.y, size.z);
+  let vs = voxel > 0 ? Math.max(0.2, voxel) : maxDim / res;
+  const pad = 8;
+  const cellsAt = (v) => (size.x / v + 2 * pad) * (size.y / v + 2 * pad) * (size.z / v + 2 * pad);
+  if (budget > 0) while (cellsAt(vs) > budget) vs *= 1.04;
   const nx = Math.ceil(size.x / vs) + 2 * pad, ny = Math.ceil(size.y / vs) + 2 * pad, nz = Math.ceil(size.z / vs) + 2 * pad;
   const ox = bb.min.x - pad * vs, oy = bb.min.y - pad * vs, oz = bb.min.z - pad * vs;
   const idx = (i, j, k) => (k * ny + j) * nx + i;
@@ -203,12 +207,16 @@ export function repairMesh(geo, { res = 120, voxel = 0, snap = true, inset = 0.6
   };
   const attempts = [{ cap: null }, ...(solid ? caps.map((c) => ({ cap: c })) : []), ...(solid ? [{ cap: null, occ: true }] : [])];
   const dims = [nx, ny, nz];
+  const dil = { lvl: 0, arr: surf };
   const bboxVox = (nx - 2 * pad) * (ny - 2 * pad) * (nz - 2 * pad);
   for (const { cap, occ: byOcc } of attempts) {
-    for (const close of byOcc ? [1] : [1, 2, 4, 6]) {
+    // mức đóng tính theo mm (≈1,3 / 2,6 / 5,2 / 7,8 mm) để ô voxel nhỏ vẫn bịt được cùng cỡ lỗ hở
+    const closeLevels = [...new Set([1.3, 2.6, 5.2, 7.8].map((mm) => Math.max(1, Math.round(mm / vs))))];
+    for (const close of byOcc ? [Math.max(1, Math.round(1.3 / vs))] : closeLevels) {
       onProgress(byOcc ? 'Vá lưới: điền đầy theo độ che chắn...' : cap ? `Vá lưới: đóng đáy ${cap} và điền đầy (mức ${close})...` : `Vá lưới: lấp lỗ (mức ${close})...`);
-      let barrier = surf;
-      for (let c = 0; c < close; c++) barrier = dilate(barrier, nx, ny, nz);
+      if (dil.lvl > close) { dil.arr = surf; dil.lvl = 0; }
+      while (dil.lvl < close) { dil.arr = dilate(dil.arr, nx, ny, nz); dil.lvl++; } // giãn dần, dùng lại kết quả mức trước
+      let barrier = dil.arr;
       if (byOcc) {
         let occ = occlusionFill(barrier, nx, ny, nz, 4);
         for (let c = 0; c < close; c++) occ = erode(occ, nx, ny, nz);

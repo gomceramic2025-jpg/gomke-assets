@@ -1,6 +1,6 @@
 // Các việc tính toán nặng. Chạy trong Web Worker (không làm đứng trang); nếu không tạo được Worker thì chạy trực tiếp.
 import * as THREE from 'three';
-import { cleanGeometry, countOpenEdges, prepareFaces, bestLayout, buildMold, buildCasing, orientPhoi } from './mold.js';
+import { cleanGeometry, fillSmallHoles, countOpenEdges, prepareFaces, bestLayout, buildMold, buildCasing, orientPhoi } from './mold.js';
 import { buildShell } from './shell.js';
 import { repairMesh } from './repair.js';
 import { read3mf } from './threemf.js';
@@ -25,21 +25,33 @@ const packCopy = (g) => { const o = pack(g, false); return { pos: Float32Array.f
 const copyOf = (o) => ({ pos: Float32Array.from(o.pos), nor: o.nor ? Float32Array.from(o.nor) : undefined, index: o.index ? Uint32Array.from(o.index) : undefined });
 const bufs = (list) => { const s = new Set(); for (const o of list) for (const k of ['pos', 'nor', 'index']) if (o[k]) s.add(o[k].buffer); return [...s]; };
 
+// Khuôn nhiều mảnh dùng phép cắt CSG trên cả lưới, nặng khi phôi hàng trăm nghìn mặt: dùng bản nhẹ bám sát bề mặt gốc
+function csgProxy(g, progress, limit = 250000) {
+  const tris = g.index ? g.index.count / 3 : g.attributes.position.count / 3;
+  if (tris <= limit) return g;
+  g.computeBoundingBox();
+  const sz = g.boundingBox.getSize(new THREE.Vector3());
+  try {
+    progress('Phôi nhiều mặt: tạo bản nhẹ để cắt khuôn...');
+    return repairMesh(g, { voxel: Math.max(sz.x, sz.y, sz.z) / 300, budget: 20e6, onProgress: progress }).geometry;
+  } catch (e) { return g; }
+}
+
 let lastMold = null; // giữ lại để tạo hộp đổ sau đó (cần hình học gốc của từng mảnh)
 
 export const handlers = {
   // Làm sạch lưới, tự vá nếu lưới hở, tự giảm mặt nếu quá nặng.
   // Cả hai việc đều dùng cách dựng lại bề mặt qua khối voxel (kín, gọn), nên file hàng triệu mặt vẫn xử lý được.
-  async prepare({ geo, buf3mf, autoRepair, solid = true, res, voxel = 0, heavy = 150000 }, progress) {
+  async prepare({ geo, buf3mf, autoRepair, solid = true, res, voxel = 0, heavy = 150000, budget = 0 }, progress) {
     let objects = 0;
     if (buf3mf) { const r3 = await read3mf(buf3mf, progress); geo = { pos: r3.pos }; objects = r3.objects; }
     const raw = unpack(geo);
     const trisRaw = raw.attributes.position.count / 3;
     let g, info;
-    if (trisRaw > 300000) {
+    if (trisRaw > Math.max(300000, heavy * 1.2)) {
       // Quá nặng để hàn đỉnh (tốn bộ nhớ): dựng lại thẳng từ các mặt gốc
       progress(`Đọc ${Math.round(trisRaw / 1000)} nghìn mặt, đang giảm mặt...`);
-      const r = repairMesh(raw, { res, voxel, solid, caps: buf3mf ? ['-z', '+z', '-y', '+y', '-x', '+x'] : undefined, onProgress: progress });
+      const r = repairMesh(raw, { res, voxel, budget, solid, caps: buf3mf ? ['-z', '+z', '-y', '+y', '-x', '+x'] : undefined, onProgress: progress });
       g = r.geometry;
       info = { openBefore: -1, repaired: true, decimated: true, trisBefore: trisRaw, voxel: r.voxel, cap: r.cap };
     } else {
@@ -47,8 +59,14 @@ export const handlers = {
       g = cleanGeometry(raw);
       const openBefore = countOpenEdges(g), tris = g.index.count / 3;
       info = { openBefore, repaired: false, decimated: false, trisBefore: trisRaw, voxel: 0 };
-      if (tris > heavy || (openBefore > 0 && autoRepair)) {
-        const r = repairMesh(g, { res, voxel, solid, onProgress: progress });
+      if (openBefore > 0 && autoRepair && tris <= heavy) {
+        // Ít lỗ nhỏ: vá thẳng trên lưới gốc, không dựng lại nên giữ nguyên toàn bộ chi tiết
+        progress('Đang vá các lỗ nhỏ trên lưới gốc...');
+        const filled = fillSmallHoles(g);
+        if (filled) { g = filled; info.repaired = true; info.filled = true; info.openBefore = openBefore; }
+      }
+      if (!info.filled && (tris > heavy || (openBefore > 0 && autoRepair))) {
+        const r = repairMesh(g, { res, voxel, budget, solid, onProgress: progress });
         g = r.geometry;
         info.repaired = openBefore > 0; info.decimated = tris > heavy; info.voxel = r.voxel; info.cap = r.cap;
       }
@@ -78,7 +96,7 @@ export const handlers = {
   },
 
   mold({ phoi, o }, progress) {
-    const m = buildMold(unpack(phoi), o, progress);
+    const m = buildMold(csgProxy(unpack(phoi), progress), o, progress);
     lastMold = m;
     const pieces = m.pieces.map((p) => ({ geo: packCopy(p.geometry), volume: p.volume, mid: p.mid }));
     const meta = { shape: m.shape, R: m.R, top: m.top, bottom: m.bottom, dims: m.dims };

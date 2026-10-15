@@ -181,18 +181,27 @@ function setBase(geo, name) {
 }
 
 // File người dùng: làm sạch và tự vá lưới hở trong worker
+// Mức máy: quyết định số mặt giữ nguyên và ngân sách bộ nhớ khi dựng lại lưới (điện thoại thấp hơn máy tính)
+const deviceTier = (() => {
+  const mem = navigator.deviceMemory || 0, mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+  if (mobile) return mem >= 6 ? { name: 'mid', heavy: 400000, budget: 25e6 } : { name: 'low', heavy: 200000, budget: 10e6 };
+  if (mem && mem < 8) return { name: 'mid', heavy: 400000, budget: 25e6 };
+  return { name: 'high', heavy: 1200000, budget: 60e6 };
+})();
+
 async function setBaseFromFile(geo, name, buf3mf) {
   const voxel = parseFloat($('detail').value) || 1.3;
+  const tier = { heavy: deviceTier.heavy, budget: deviceTier.budget };
   let payload, transfer;
   if (buf3mf) {
-    payload = { buf3mf: new Uint8Array(buf3mf), autoRepair: $('autoRepair').checked, solid: $('autoSolid').checked, voxel };
+    payload = { buf3mf: new Uint8Array(buf3mf), autoRepair: $('autoRepair').checked, solid: $('autoSolid').checked, voxel, ...tier };
     transfer = [buf3mf];
   } else {
     const pc = geo.attributes && geo.attributes.position ? geo.attributes.position.count : 0;
     if (pc < 12) throw new Error('file không có mặt tam giác nào (rỗng hoặc sai định dạng)');
     if (pc / 3 > 6000000) throw new Error('mô hình có ' + (pc / 3000000).toFixed(1) + ' triệu mặt, vượt quá khả năng của trình duyệt (tối đa 6 triệu). Hãy giảm mặt bằng phần mềm 3D rồi tải lại');
     const raw = geo.attributes.position.array; // chuyển thẳng sang worker, không sao chép (file nặng rất tốn bộ nhớ)
-    payload = { geo: { pos: raw }, autoRepair: $('autoRepair').checked, solid: $('autoSolid').checked, voxel };
+    payload = { geo: { pos: raw }, autoRepair: $('autoRepair').checked, solid: $('autoSolid').checked, voxel, ...tier };
     transfer = [raw.buffer];
   }
   const r = await runTask('prepare', payload, 'Đang đọc và làm sạch lưới...', transfer);
@@ -210,7 +219,9 @@ async function setBaseFromFile(geo, name, buf3mf) {
     notes.push(`Mô hình là vỏ rỗng hở nên app đã ${where} và điền đầy thành khối đặc. Hãy xem lại hình dạng trước khi tạo khuôn.`);
   }
   if (i.decimated) notes.push(`Mô hình ${k(i.trisBefore)} mặt quá nặng nên đã được giảm xuống còn ${k(i.trisAfter)} mặt.`);
-  if (i.repaired && i.openBefore > 0) notes.push(`Đã tự vá lưới hở: ${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}.`);
+  if (i.filled) notes.push(`Đã vá các lỗ nhỏ trực tiếp trên lưới gốc (${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}); giữ nguyên ${k(i.trisAfter)} mặt, không làm mất chi tiết.`);
+  else if (i.repaired && i.openBefore > 0) notes.push(`Đã tự vá lưới hở: ${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}.`);
+  if (i.voxel && i.voxel > voxel * 1.03) notes.push(`Máy này chỉ đủ bộ nhớ cho ô ${fmt(i.voxel, 2)} mm (bạn chọn ${fmt(voxel, 2)} mm). Dùng máy tính khỏe hơn nếu cần mịn hơn.`);
   if (i.voxel) notes.push(`Lưới mới có ô khoảng ${fmt(i.voxel, 1)} mm và đã bám sát bề mặt gốc. Chi tiết nhỏ hơn mức này có thể bị mất (chọn “Chi tiết” hoặc “Rất chi tiết” nếu cần giữ nhiều hơn).`);
   repairNote = notes.filter((x) => !x.startsWith('Đã đọc file 3MF')).join(' ');
   g.computeVertexNormals();

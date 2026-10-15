@@ -1,0 +1,12 @@
+import * as THREE from 'three';
+import { orientPhoi } from '../src/mold.js';
+import { invertPhoi } from '../src/shell.js';
+import { dividerFromSlices } from '../src/slice.js';
+import { twistedVase } from '../src/sample.js';
+const ph = orientPhoi(twistedVase(), { shrink: 0.12, center: 'bbox' });
+const inv = invertPhoi(ph, 25);
+inv.computeBoundingBox(); console.log('inv bbox', inv.boundingBox.min.toArray().map(Math.round), inv.boundingBox.max.toArray().map(Math.round));
+const g = dividerFromSlices(inv, { a: 0, td: 1.2, y0: 0, y1: 254, limitR: () => 110, sprue: { R: 14, h: 25.5 } });
+g.computeBoundingBox(); console.log('tris', g.attributes.position.count / 3, g.boundingBox.min.toArray().map(Math.round), g.boundingBox.max.toArray().map(Math.round));
+import { meshVolume } from '../src/mold.js';
+console.log('volume', meshVolume(g), 'expected ~', 1.2 * 110 * 254 * 0.5);

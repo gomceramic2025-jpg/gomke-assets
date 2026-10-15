@@ -38,6 +38,60 @@ export function countOpenEdges(geo) {
   return open;
 }
 
+// Vá các lỗ nhỏ trực tiếp trên lưới gốc (quạt tam giác quanh tâm lỗ), giữ nguyên toàn bộ chi tiết còn lại.
+// Trả về lưới mới nếu mọi lỗ đều vá được (kín hoàn toàn), ngược lại trả về null để dùng cách dựng lại bằng voxel.
+export function fillSmallHoles(geo, { maxLoop = 400, maxSpan = 0.2 } = {}) {
+  const idx = geo.index, P = geo.attributes.position;
+  if (!idx) return null;
+  const dir = new Map(), und = new Map();
+  for (let i = 0; i < idx.count; i += 3) {
+    for (let e = 0; e < 3; e++) {
+      const x = idx.getX(i + e), y = idx.getX(i + (e + 1) % 3);
+      dir.set(x * 4294967296 + y, [x, y]);
+      const k = x < y ? x * 4294967296 + y : y * 4294967296 + x;
+      und.set(k, (und.get(k) || 0) + 1);
+    }
+  }
+  for (const c of und.values()) if (c > 2) return null; // cạnh dùng chung > 2 mặt: để voxel xử lý
+  const next = new Map();
+  for (const [k, [x, y]] of dir) {
+    if (dir.has(y * 4294967296 + x)) continue;
+    if (next.has(x)) return null; // đỉnh có hai đường biên: phức tạp
+    next.set(x, y);
+  }
+  if (!next.size) return geo;
+  geo.computeBoundingBox();
+  const diag = geo.boundingBox.getSize(new THREE.Vector3()).length();
+  const added = [], newPts = [];
+  const seen = new Set();
+  let nv = P.count;
+  for (const start of next.keys()) {
+    if (seen.has(start)) continue;
+    const loop = [start]; seen.add(start);
+    let cur = next.get(start);
+    while (cur !== start) {
+      if (cur === undefined || seen.has(cur) || loop.length > maxLoop) return null;
+      loop.push(cur); seen.add(cur); cur = next.get(cur);
+    }
+    const c = new THREE.Vector3(), v = new THREE.Vector3(), lo = new THREE.Vector3(1e9, 1e9, 1e9), hi = new THREE.Vector3(-1e9, -1e9, -1e9);
+    for (const q of loop) { v.fromBufferAttribute(P, q); c.add(v); lo.min(v); hi.max(v); }
+    if (lo.distanceTo(hi) > maxSpan * diag) return null; // lỗ quá lớn so với vật: không đoán hình
+    c.divideScalar(loop.length);
+    newPts.push(c.x, c.y, c.z);
+    for (let i = 0; i < loop.length; i++) added.push(loop[(i + 1) % loop.length], loop[i], nv); // ngược chiều cạnh biên
+    nv++;
+  }
+  const pos = new Float32Array((P.count + newPts.length / 3) * 3);
+  pos.set(P.array.subarray(0, P.count * 3)); pos.set(newPts, P.count * 3);
+  const ix = new Uint32Array(idx.count + added.length);
+  ix.set(idx.array.subarray(0, idx.count)); ix.set(added, idx.count);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setIndex(new THREE.BufferAttribute(ix, 1));
+  g.computeVertexNormals(); g.computeBoundingBox();
+  return countOpenEdges(g) === 0 ? g : null;
+}
+
 // Chỉ giữ position, hàn các đỉnh trùng, tính lại normal, đảm bảo mặt hướng ra ngoài.
 export function cleanGeometry(geo) {
   let g = geo.index ? geo.toNonIndexed() : geo.clone();

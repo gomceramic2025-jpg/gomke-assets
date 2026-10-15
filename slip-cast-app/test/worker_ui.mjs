@@ -23,7 +23,7 @@ await p.screenshot({ path: d + '/18_repaired.png' });
 // 3. hủy giữa chừng
 await p.click('#shBuild'); await p.waitForTimeout(250);
 const busyShown = await p.evaluate(() => !document.getElementById('busy').hidden);
-await p.click('#busyCancel'); await p.waitForTimeout(300);
+await p.evaluate(() => document.getElementById('busyCancel').click()); await p.waitForTimeout(300);
 console.log('3. đang chạy có hiện thanh tiến trình:', busyShown, '| sau Hủy: busy ẩn =', await p.evaluate(() => document.getElementById('busy').hidden), '| nút tạo bật lại =', !(await p.isDisabled('#shBuild')), '| toast:', await p.textContent('#toast'));
 // 4. đổi phôi giữa lúc đang tạo: chỉ còn kết quả của phôi mới
 await p.click('#shBuild'); await p.waitForTimeout(250); await p.click('#demo'); await p.waitForTimeout(1200); await settle(p);

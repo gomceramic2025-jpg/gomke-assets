@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { Evaluator, SUBTRACTION, ADDITION, INTERSECTION } from 'three-bvh-csg';
 import { cleanGeometry, meshVolume, phoiStats, toBrush, stripGeo, sectorsFromAngles } from './mold.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { dividerFromSlices } from './slice.js';
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
@@ -153,13 +154,6 @@ function sectorSolid(a0, a1, off, L, y0, y1) {
   return extrudePoly(poly, y0, y1);
 }
 
-// Vách phẳng dạng tia từ trục ra ngoài, dày td.
-function slabSolid(a, td, L, y0, y1) {
-  const u = [Math.cos(a * DEG), Math.sin(a * DEG)], n = [-u[1], u[0]], h = td / 2;
-  const pt = (s, w) => [u[0] * s + n[0] * w, u[1] * s + n[1] * w];
-  return extrudePoly([pt(0, -h), pt(L, -h), pt(L, h), pt(0, h)], y0, y1);
-}
-
 // ---------- Dựng toàn bộ hộp bao ----------
 
 export function buildShell(phoi, o, onProgress = () => {}) {
@@ -189,7 +183,13 @@ export function buildShell(phoi, o, onProgress = () => {}) {
   const inv = invertPhoi(phoi, spare);
   const sprue = new THREE.CylinderGeometry(pourR, pourR, spare + 0.5, 48);
   sprue.translate(0, (spare + 0.5) / 2, 0);
-  const positive = stripGeo(ex(inv, sprue, ADDITION).geometry);
+  const invTris = (inv.index ? inv.index.count : inv.attributes.position.count) / 3;
+  let positive;
+  if (invTris > 250000) { // phôi rất nhiều mặt: ghép rời (không cộng CSG) để khỏi tốn bộ nhớ, đủ để in/hiển thị
+    const a = inv.index ? inv.toNonIndexed() : inv.clone(), b = sprue.toNonIndexed();
+    for (const q of [a, b]) { for (const k of Object.keys(q.attributes)) if (k !== 'position' && k !== 'normal') q.deleteAttribute(k); if (!q.attributes.normal) q.computeVertexNormals(); }
+    positive = stripGeo(mergeGeometries([a, b]));
+  } else positive = stripGeo(ex(inv, sprue, ADDITION).geometry);
 
   onProgress(shape === 'conformal' ? 'Tính đường bao uốn theo phôi...' : 'Tính khung ngoài...');
   const prof = radialProfile([inv, sprue], yTop);
@@ -204,7 +204,6 @@ export function buildShell(phoi, o, onProgress = () => {}) {
   // phôi nới nhẹ theo phương ngang để vách chia lắp vào được
   const sc = 1 + clear / Math.max(rv, 1);
   const invC = inv.clone(); invC.scale(sc, 1, sc);
-  const sprueC = sprue.clone(); sprueC.scale(sc, 1, sc);
 
   // Khối bao ngoài của thạch cao, mở rộng thêm off (mm) ra ngoài: uốn theo phôi, hình trụ hoặc hình hộp
   const cylProf = { R: new Float32Array(prof.R.length).fill(Math.max(1, Rc - wall)), ny: prof.ny, nPhi: prof.nPhi, dy: prof.dy, flat: true };
@@ -273,15 +272,13 @@ export function buildShell(phoi, o, onProgress = () => {}) {
     shellMinus = ev.evaluate(toBrush(hollow.geometry), toBrush(half(-1)), INTERSECTION).geometry;
   }
 
-  const dividerBase = env(noPanels ? 0 : t, 0, yPanel); // không in vỏ: vách dừng ngay mép trong để tấm có sẵn áp sát
-  const invCBrush = toBrush(invC), sprueCBrush = toBrush(sprueC);
   // Vách chia: nếu mặt phẳng cắt trùng đúng mặt đối xứng của phôi, phép trừ có thể sinh số mặt khổng lồ.
   // Khi đó thử lại với góc lệch rất nhỏ (< 0,2 độ), không ảnh hưởng thực tế.
   const makeDivider = (a, nudge) => {
     const ang = a + nudge;
-    let d = ex(slabSolid(ang, td + Math.abs(nudge) * 0.1, Lbig, -1, yPanel + 1), dividerBase, INTERSECTION);
-    d = ev.evaluate(toBrush(d.geometry), invCBrush, SUBTRACTION);
-    d = ev.evaluate(toBrush(d.geometry), sprueCBrush, SUBTRACTION);
+    // vách = lát cắt chính xác của phôi (nới nhẹ) trừ khỏi tia từ trục tới mép thạch cao; không dùng CSG với lưới phôi
+    const phi = ang * DEG;
+    let d = { geometry: dividerFromSlices(invC, { a: ang, td: td + Math.abs(nudge) * 0.1, y0: 0, y1: yPanel, limitR: (y) => outerR(Math.min(y, yTop), phi) + (noPanels ? 0 : t), sprue: { R: pourR * sc, h: spare + 0.5 } }) };
     if (keysOn) {
       const spots = keySpots.map((ks, i) => ({ ks, i, rp: (rAt(prof, ks.y, ang * DEG) + outerR(ks.y, ang * DEG)) / 2 }));
       if (keyType === 'ball') {
@@ -329,7 +326,7 @@ export function buildShell(phoi, o, onProgress = () => {}) {
   }
   parts.push({ kind: 'phoi', name: 'phoi_dao_nguoc_kem_cuong', label: 'Phôi + cuống', geometry: positive, mid: 0 });
 
-  const vol = (g) => Math.abs(meshVolume(g.index ? g : g.toNonIndexed()));
+  const vol = (g) => Math.abs(meshVolume(g));
   const divVol = parts.filter((p) => p.kind === 'divider').reduce((s, p) => s + vol(p.geometry), 0);
   const plasterMm3 = Math.max(0, vol(E0) - vol(inv) - vol(sprue) - divVol);
   const outW = shape === 'box' ? 2 * (hx + wall + t) : shape === 'cylinder' ? 2 * (Rc + t) : 2 * (rmax + wall + t);
