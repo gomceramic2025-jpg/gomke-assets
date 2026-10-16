@@ -811,26 +811,19 @@ function keyText(k, o) {
 }
 
 function showSequential(r, o) {
-  let x = 0, maxH = 0, maxD = 0;
-  const trays = r.parts.filter((p) => p.kind === 'tray');
-  trays.forEach((p, i) => {
+  let x = 0, maxH = 0, maxD = 0, pi = 0;
+  const COLORS = { frame: 0x9bb8d9, funnel: 0xb8b0a4 };
+  r.parts.forEach((p) => {
     p.geometry.computeBoundingBox();
     const b = p.geometry.boundingBox, w = b.max.x - b.min.x;
-    const m = new THREE.Mesh(p.geometry, new THREE.MeshStandardMaterial({ color: PANEL_COLORS[i % PANEL_COLORS.length], roughness: 0.7, side: THREE.DoubleSide }));
+    const color = p.kind === 'plate' ? PANEL_COLORS[pi++ % PANEL_COLORS.length] : COLORS[p.kind];
+    const m = new THREE.Mesh(p.geometry, new THREE.MeshStandardMaterial({ color, roughness: 0.7, side: THREE.DoubleSide }));
     m.rotation.x = -Math.PI / 2; // hình in nằm theo Z lên, khung nhìn theo Y lên
     m.position.set(x - b.min.x, -b.min.z, (b.min.y + b.max.y) / 2);
-    m.userData = { kind: 'tray', mid: 0 };
+    m.userData = { kind: p.kind, mid: 0 };
     shellGroup.add(m);
     x += w + 14; maxH = Math.max(maxH, b.max.z - b.min.z); maxD = Math.max(maxD, b.max.y - b.min.y);
   });
-  const fn = r.parts.find((p) => p.kind === 'funnel');
-  if (fn) {
-    fn.geometry.computeBoundingBox();
-    const b = fn.geometry.boundingBox;
-    const m = new THREE.Mesh(fn.geometry, new THREE.MeshStandardMaterial({ color: 0xb8b0a4, roughness: 0.7, side: THREE.DoubleSide }));
-    m.rotation.x = -Math.PI / 2; m.position.set(x + 20 - b.min.x, -b.min.z, (b.min.y + b.max.y) / 2); m.userData = { kind: 'funnel', mid: 0 };
-    shellGroup.add(m); x += 20 + (b.max.x - b.min.x);
-  }
   shellGroup.children.forEach((m) => { m.position.x -= x / 2; });
   fitShell(Math.max(x / 2, maxD / 2), maxH / 2);
 }
@@ -881,9 +874,9 @@ function showSequentialInfo(r, o) {
   const pcs = r.pieces.map((p, i) => `mảnh ${i + 1}: ${fmt(Math.round(p.span))}° · ${fmt(p.plasterMm3 / 1000)} ml`).join('<br>');
   const k = r.keyInfo;
   $('shInfo').innerHTML =
-    `<span class="sw" style="background:#e3b04b"></span>${n} khay đổ (mỗi khay một mảnh) · <span class="sw" style="background:#b8b0a4"></span>1 phễu rót<br>` +
-    `Khay dài ${fmt(d.L)} × rộng ${fmt(d.W)} × cao ${fmt(d.Hh)} mm. Mức đổ thạch cao cách mép khay 4 mm.<br>${pcs}` +
-    (k && k.count ? `<br>Chốt lồi – lõm: ${k.count} chốt bán kính ${fmt(k.r, 1)} mm. Mặt chia đầu của mỗi khay có chốt lồi, mặt chia cuối có hốc; mảnh k khớp mảnh k+1.` : '<br>Không có chốt định vị (thành thạch cao quá mỏng hoặc đã tắt).');
+    `<span class="sw" style="background:#e3b04b"></span>${n} tấm phôi (mỗi tấm một mảnh) · <span class="sw" style="background:#9bb8d9"></span>1 khung hộp dùng chung · <span class="sw" style="background:#b8b0a4"></span>1 phễu rót<br>` +
+    `Khung hộp dài ${fmt(d.L)} × rộng ${fmt(d.W)} × cao ${fmt(d.Hh)} mm. Mức đổ thạch cao cách mép khung 4 mm.<br>${pcs}` +
+    (k && k.count ? `<br>Chốt lồi – lõm: ${k.count} chốt bán kính ${fmt(k.r, 1)} mm. Mặt chia đầu của mỗi tấm có chốt lồi, mặt chia cuối có hốc; mảnh k khớp mảnh k+1.` : '<br>Không có chốt định vị (thành thạch cao quá mỏng hoặc đã tắt).');
   showShellPlaster();
   $('shDlAll').disabled = false;
   const box = $('shDlParts'); box.innerHTML = '';
@@ -892,7 +885,7 @@ function showSequentialInfo(r, o) {
     b.addEventListener('click', () => download(new THREE.Mesh(p.geometry), p.name + '.stl'));
     box.appendChild(b);
   });
-  $('shGuide').innerHTML = 'Cách dùng: in các khay (nằm phẳng, mặt đáy xuống bàn) và phễu. Phủ chất tách khuôn lên rãnh và phôi. Đặt khay 1 nằm ngang, trộn thạch cao rồi đổ vào rãnh tới mức đã nêu, gõ nhẹ đuổi bọt. Khi thạch cao đã đông, lấy mảnh ra rồi đổ mảnh kế tiếp bằng khay 2, 3... Ghép các mảnh quanh trục, siết bằng dây thun/đai, cắm phễu vào lỗ rót ở đầu có cuống.';
+  $('shGuide').innerHTML = 'Cách dùng: in các tấm phôi, 1 khung hộp (dùng chung cho mọi mảnh) và phễu. Phủ chất tách khuôn lên tấm. Đặt khung nằm trên bàn phẳng, cho tấm mảnh 1 vào trong khung (đầu cuống xuyên qua lỗ ở thành khung; trám khe quanh cuống và các khe hở bằng đất sét hoặc sáp). Trộn thạch cao, đổ vào rãnh tới mức đã nêu, gõ nhẹ đuổi bọt. Thạch cao đông thì lấy mảnh ra, đổi sang tấm mảnh 2, 3... trong cùng khung. Ghép các mảnh quanh trục, siết dây thun/đai, cắm phễu vào lỗ rót.';
 }
 
 function showShellPlaster() {

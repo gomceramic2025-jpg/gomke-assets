@@ -104,42 +104,60 @@ export function buildSequential(phoi, o, onProgress = () => {}) {
 
   const parts = [];
   const pieces = [];
+  const g0 = Math.max(0.2, clear || 0.3);             // khe lắp giữa tấm và khung
+  // bề ngang chung của mọi tấm (khung dùng chung cho mọi mảnh)
+  const wMax = Math.max(...secs.map((s) => Math.max(cavityPoly((s.span / 2) * DEG, zTopF, capW).wTop, rmax + 2)));
+  const S = [g0 + wc, wMax + g0 + wc, fl];            // dời để mọi chi tiết nằm ở góc dương, đáy ở z = 0
+  // cuống rót kéo dài xuyên qua thành khung ở đầu cuống
+  const sprueExt = new THREE.CylinderGeometry(pourR, pourR, spare + 0.5 + g0 + wc, 48);
+  sprueExt.translate(0, (spare + 0.5 - g0 - wc) / 2, 0);
   secs.forEach((s, k) => {
-    onProgress(`Khay đổ mảnh ${k + 1}/${secs.length}...`);
+    onProgress(`Tấm phôi mảnh ${k + 1}/${secs.length}...`);
     const half = (s.span / 2) * DEG, m = s.mid * DEG;
-    // phép xoay từ khung khuôn sang khung khay: X = trục khuôn, Z = hướng phân giác (lên), Y = ngang
+    // phép xoay từ khung khuôn sang khung tấm: X = trục khuôn, Z = hướng phân giác (lên), Y = ngang
     const M = new THREE.Matrix4().set(0, 1, 0, 0, -Math.sin(m), 0, Math.cos(m), 0, Math.cos(m), 0, Math.sin(m), 0, 0, 0, 0, 1);
-    const cav = cavityPoly(half, zTopF, capW);
-    const halfW = Math.max(cav.wTop, rmax + 2) + wc;
-    const outer = new THREE.BoxGeometry(yTop + 2 * wc, 2 * halfW, zTopF + fl);
-    outer.translate(yTop / 2, 0, (zTopF - fl) / 2);
-    const cavG = prismX(cav.poly, 0, yTop);
-    let tray = ev.evaluate(toBrush(plain(outer)), toBrush(cavG), SUBTRACTION);
+    const block = new THREE.BoxGeometry(yTop, 2 * wMax, zTopF + fl);
+    block.translate(yTop / 2, 0, (zTopF - fl) / 2);
+    // lăng trụ khoét lớn hơn khối một chút để không trùng mặt phẳng
+    const cavCut = cavityPoly(half, zTopF + 2, wMax + 1);
+    const cavG = prismX(cavCut.poly, -1, yTop + 1);
+    let plate = ev.evaluate(toBrush(plain(block)), toBrush(cavG), SUBTRACTION);
     if (keyOk) {
       // mặt đầu (−half): chốt lồi; mặt cuối (+half): hốc lõm
       const dirA = [-Math.sin(half), Math.cos(half)], dirB = [Math.sin(half), Math.cos(half)];
       const fa = faceKeys[k], fb = faceKeys[(k + 1) % secs.length];
       const pegs = fa.map((q) => { const g = new THREE.SphereGeometry(kr, 24, 16); g.translate(q.y, dirA[0] * q.r, dirA[1] * q.r); return plain(g); });
       const holes = fb.map((q) => { const g = new THREE.SphereGeometry(kr + tol, 24, 16); g.translate(q.y, dirB[0] * q.r, dirB[1] * q.r); return plain(g); });
-      tray = ev.evaluate(toBrush(tray.geometry), toBrush(mergeGeometries(holes)), SUBTRACTION);
-      tray = ev.evaluate(toBrush(tray.geometry), toBrush(mergeGeometries(pegs)), ADDITION);
+      plate = ev.evaluate(toBrush(plate.geometry), toBrush(mergeGeometries(holes)), SUBTRACTION);
+      plate = ev.evaluate(toBrush(plate.geometry), toBrush(mergeGeometries(pegs)), ADDITION);
     }
-    // phôi + cuống vào khung khay (ghép rời, phần ngoài rãnh chìm trong khối đặc)
+    // phôi + cuống vào tấm (ghép rời, phần ngoài rãnh chìm trong khối đặc)
     const posG = (g) => { const q = plain(g); q.applyMatrix4(M); return q; };
-    const positive = mergeGeometries([posG(inv), posG(sprue)]);
-    const trayG = stripGeo(tray.geometry);
-    const tg = mergeGeometries([trayG, positive]);
-    tg.computeBoundingBox();
-    const bb = tg.boundingBox;
-    tg.translate(-bb.min.x, -bb.min.y, -bb.min.z); // đáy khay nằm trên bàn in
-    parts.push({ kind: 'tray', name: `khay_do_manh_${k + 1}`, label: `Khay mảnh ${k + 1} (${Math.round(s.span)}°)`, geometry: tg, mid: m, frame: { M: M.elements.slice(), shift: [bb.min.x, bb.min.y, bb.min.z] } });
+    const positive = mergeGeometries([posG(inv), posG(sprueExt)]);
+    const pg = mergeGeometries([stripGeo(plate.geometry), positive]);
+    pg.translate(S[0], S[1], S[2]);
+    parts.push({ kind: 'plate', name: `tam_phoi_manh_${k + 1}`, label: `Tấm phôi mảnh ${k + 1} (${Math.round(s.span)}°)`, geometry: pg, mid: m, frame: { M: M.elements.slice(), shift: [-S[0], -S[1], -S[2]] } });
     // thể tích thạch cao của mảnh = khoang − (phôi + cuống) nằm trong khoang
     const cavVol = area(cavityPoly(half, hTop, capW).poly) * yTop;
-    // hai mặt chia, pháp tuyến hướng vào khoang (y,z); đi qua trục nên phần "nắp" cắt không ảnh hưởng thể tích
     const inPlanes = [[0, Math.cos(half), Math.sin(half), 0], [0, -Math.cos(half), Math.sin(half), 0]];
     const vPhoi = clipVolume(posG(inv), inPlanes), vSprue = clipVolume(posG(sprue), inPlanes);
     pieces.push({ span: s.span, plasterMm3: Math.max(0, cavVol - vPhoi - vSprue) });
   });
+
+  // khung hộp dùng chung: vòng 4 thành, hở trên và dưới; tấm phôi đặt vào trong. Thành đầu cuống có lỗ cho cuống xuyên qua.
+  onProgress('Khung hộp...');
+  const fx0 = -g0 - wc, fx1 = yTop + g0 + wc, fyh = wMax + g0 + wc, fz1 = zTopF;
+  const fOuter = new THREE.BoxGeometry(fx1 - fx0, 2 * fyh, fz1 + fl);
+  fOuter.translate((fx0 + fx1) / 2, 0, (fz1 - fl) / 2);
+  const fInner = new THREE.BoxGeometry(yTop + 2 * g0, 2 * (wMax + g0), fz1 + fl + 4);
+  fInner.translate(yTop / 2, 0, (fz1 - fl) / 2);
+  let frame = ev.evaluate(toBrush(plain(fOuter)), toBrush(plain(fInner)), SUBTRACTION);
+  const hole = new THREE.CylinderGeometry(pourR + g0, pourR + g0, wc + g0 + 2, 48);
+  hole.rotateZ(Math.PI / 2); hole.translate(fx0 + (wc + g0 + 2) / 2 - 1, 0, 0);
+  frame = ev.evaluate(toBrush(frame.geometry), toBrush(plain(hole)), SUBTRACTION);
+  const fg = stripGeo(frame.geometry);
+  fg.translate(S[0], S[1], S[2]);
+  parts.push({ kind: 'frame', name: 'khung_hop_dung_chung', label: 'Khung hộp (dùng chung)', geometry: fg, mid: 0, frame: { M: null, shift: [-S[0], -S[1], -S[2]] } });
 
   // phễu rót slip: cổ cắm vào lỗ rót, miệng loe
   const neck = pourR - 0.3, rTop = pourR * 2.4 + 4, fh = 22, collar = 6;
@@ -149,6 +167,6 @@ export function buildSequential(phoi, o, onProgress = () => {}) {
   funnel.rotateX(Math.PI / 2); funnel.computeBoundingBox(); funnel.translate(-funnel.boundingBox.min.x, -funnel.boundingBox.min.y, -funnel.boundingBox.min.z);
   parts.push({ kind: 'funnel', name: 'phieu_rot', label: 'Phễu rót slip', geometry: funnel, mid: 0 });
   const total = pieces.reduce((a, p) => a + p.plasterMm3, 0);
-  const trayDims = parts.map((p) => { const b = new THREE.Box3().setFromBufferAttribute(p.geometry.attributes.position); return b.getSize(new THREE.Vector3()); });
-  return { parts, pieces, plasterMm3: total, keyInfo: keyOk ? { type: 'dome', r: kr, count: faceKeys.flat().length, ballD: 0 } : { type: 'none', r: 0, count: 0 }, dims: { H: hTop, L: yTop + 2 * wc, W: Math.max(...trayDims.map((d) => d.y)), Hh: Math.max(...trayDims.map((d) => d.z)) }, yTop, rmax, fillHeight: hTop };
+  const trayDims = parts.filter((p) => p.kind === 'plate' || p.kind === 'frame').map((p) => { const b = new THREE.Box3().setFromBufferAttribute(p.geometry.attributes.position); return b.getSize(new THREE.Vector3()); });
+  return { parts, pieces, plasterMm3: total, keyInfo: keyOk ? { type: 'dome', r: kr, count: faceKeys.flat().length, ballD: 0 } : { type: 'none', r: 0, count: 0 }, dims: { H: hTop, L: Math.max(...trayDims.map((d) => d.x)), W: Math.max(...trayDims.map((d) => d.y)), Hh: Math.max(...trayDims.map((d) => d.z)) }, yTop, rmax, fillHeight: hTop };
 }

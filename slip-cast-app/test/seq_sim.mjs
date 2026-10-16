@@ -4,6 +4,7 @@ import { orientPhoi, prepareFaces, bestLayout } from '../src/mold.js';
 import { invertPhoi } from '../src/shell.js';
 import { buildSequential } from '../src/seq.js';
 import { twistedVase } from '../src/sample.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 const vs = 0.8;
 function fill(part, zFill) {
   const g = part.geometry; g.computeBoundingBox(); const bb = g.boundingBox, pad = 4;
@@ -36,7 +37,9 @@ for (const [name, g0, angles] of [['cầu 3 mảnh', new THREE.SphereGeometry(30
   const ang = angles || bestLayout(prepareFaces(invertPhoi(ph, 25)), 1).angles;
   const r = buildSequential(ph, { angles: ang, wall: 12, spare: 25, pourR: 8, base: 8, keyR: 5, clear: 0.3, keyCount: 2, keyType: 'dome' });
   const owner = new Map(); let overlap = 0, inside = 0;
-  r.parts.filter((p) => p.kind === 'tray').forEach((p, k) => {
+  const fr = r.parts.find((q) => q.kind === 'frame');
+  r.parts.filter((p0) => p0.kind === 'plate').forEach((p0, k) => {
+    const p = { ...p0, geometry: mergeGeometries([p0.geometry, fr.geometry]) };
     const g = p.geometry; g.computeBoundingBox();
     // mức đổ trong khung khay đã dịch: zFill = đáy + (rmax+4) + hTop
     const zFill = g.boundingBox.min.z + (r.rmax + 4) + r.fillHeight;
