@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { cleanGeometry, fillSmallHoles, countOpenEdges, prepareFaces, bestLayout, buildMold, buildCasing, orientPhoi } from './mold.js';
 import { buildShell } from './shell.js';
+import { buildSequential } from './seq.js';
 import { repairMesh } from './repair.js';
 import { read3mf } from './threemf.js';
 
@@ -90,6 +91,11 @@ export const handlers = {
   },
 
   shell({ phoi, o }, progress) {
+    if (o.method === 'sequential') {
+      const q = buildSequential(unpack(phoi), o, progress);
+      const sp = q.parts.map((p) => ({ kind: p.kind, name: p.name, label: p.label, mid: p.mid, geo: pack(p.geometry, false) }));
+      return { result: { sequential: true, parts: sp, pieces: q.pieces, plasterMm3: q.plasterMm3, keyInfo: q.keyInfo, dims: q.dims, yTop: q.yTop, rmax: q.rmax, fillHeight: q.fillHeight, H: q.dims.H, sheet: { shape: 'sequential', noPanels: true } }, transfer: bufs(sp.map((p) => p.geo)) };
+    }
     const r = buildShell(unpack(phoi), o, progress);
     const parts = r.parts.map((p) => ({ kind: p.kind, name: p.name, label: p.label, mid: p.mid, geo: pack(p.geometry, false) }));
     return { result: { parts, plasterMm3: r.plasterMm3, yTop: r.yTop, rmax: r.rmax, dims: r.dims, H: r.H, keyInfo: r.keyInfo, sheet: r.sheet }, transfer: bufs(parts.map((p) => p.geo)) };

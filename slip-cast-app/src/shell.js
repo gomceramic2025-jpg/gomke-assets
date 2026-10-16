@@ -76,7 +76,7 @@ export function radialProfile(geos, yMax, dy = 3, nPhi = 72) {
   return { R: cur, ny, nPhi, dy };
 }
 
-function rAt(prof, y, phi) {
+export function rAt(prof, y, phi) {
   const { R, ny, nPhi, dy } = prof;
   const fy = Math.max(0, Math.min(ny - 1, y / dy));
   const y0 = Math.floor(fy), y1 = Math.min(ny - 1, y0 + 1), ty = fy - y0;
