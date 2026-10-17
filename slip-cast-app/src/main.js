@@ -330,7 +330,7 @@ function rebuildPhoi(refit) {
     let re = 0;
     const p = phoi.attributes.position;
     for (let i = 0; i < p.count; i++) if (p.getY(i) > st.H * 0.95) re = Math.max(re, Math.hypot(p.getX(i), p.getZ(i)));
-    $('pourR').value = Math.max(5, Math.round((re || st.rmax * 0.4) * 0.6));
+    $('pourR').value = Math.min(30, Math.max(5, Math.round((re || st.rmax * 0.4) * 0.6))); // cuống rót thực tế không quá ~60 mm đường kính
     $('shPour').value = $('pourR').value;
   }
   modeRefresh();
