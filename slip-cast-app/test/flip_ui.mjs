@@ -1,0 +1,14 @@
+import { chromium } from '/opt/node-tools/node_modules/playwright/index.mjs';
+const d = process.argv[2];
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader','--no-sandbox'] });
+const p = await b.newPage({ viewport: { width: 1280, height: 800 } }); const errs = []; p.on('pageerror', e => errs.push(e.message));
+await p.goto('file://' + process.cwd() + '/artifact.html');
+const settle = () => p.waitForFunction(() => document.getElementById('busy').hidden && /Xong|lỗi/.test(document.getElementById('shStatus').textContent), null, { timeout: 120000 });
+await p.waitForTimeout(600); await settle();
+console.log('chi tiết mặc định:', await p.inputValue('#detail'));
+const r0 = await p.inputValue('#shPour');
+await p.selectOption('#flip', '180'); await p.waitForTimeout(1500); await settle();
+console.log('bán kính cuống: trước', r0, '→ sau', await p.inputValue('#shPour'), '|', await p.textContent('#shStatus'));
+await p.selectOption('#shMethod', 'sequential'); await p.click('#shBuild'); await p.waitForTimeout(500); await settle();
+console.log((await p.innerText('#shInfo')).split('\n')[0].slice(0, 120)); await p.screenshot({ path: d + '/27_flip.png' });
+console.log('errors', errs); await b.close();

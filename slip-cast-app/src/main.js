@@ -164,7 +164,7 @@ function commitBase(g, name, rx0 = 0) {
   const bs = g.boundingBox.getSize(new THREE.Vector3());
   if (![bs.x, bs.y, bs.z].every((v) => isFinite(v) && v > 0)) throw new Error('kích thước mô hình không hợp lệ');
   baseGeo = g;
-  rot.x = rx0; rot.z = 0;
+  rot.x = rx0; rot.z = 0; $('flip').value = '0';
   pourManual = false;
   $('fileName').textContent = name;
   rebuildPhoi(true);
@@ -289,6 +289,8 @@ const rot = { x: 0, z: 0 };
 $('rotX').addEventListener('click', () => { rot.x = (rot.x + 90) % 360; rebuildPhoi(true); });
 $('rotZ').addEventListener('click', () => { rot.z = (rot.z + 90) % 360; rebuildPhoi(true); });
 $('pourR').addEventListener('input', () => (pourManual = true));
+$('flip').addEventListener('change', () => { pourManual = false; rebuildPhoi(true); });
+if (deviceTier.name === 'high') $('detail').value = '0.9'; // máy mạnh: mặc định giữ chi tiết mịn (xúc tu, hoa văn nhỏ)
 
 // ---------- Dựng phôi + kiểm tra góc thoát ----------
 function clearMold() {
@@ -312,11 +314,11 @@ function rebuildPhoi(refit) {
   const unit = num('unit') || 1;
   let shrink = num('shrink');
   if (!(shrink >= 0 && shrink <= 30)) { shrink = Math.min(30, Math.max(0, shrink || 0)); $('shrink').value = shrink; toast('Co ngót chỉ nhận từ 0 đến 30%. Đã đặt lại thành ' + shrink + '%.', true); }
-  phoi = orientPhoi(baseGeo, { unit, rx: rot.x, rz: rot.z, shrink: shrink / 100, center: shellMode0() && $('shShape').value === 'cylinder' && $('shCenter').checked ? 'circle' : 'bbox' });
+  phoi = orientPhoi(baseGeo, { unit, rx: rot.x + (num('flip') || 0), rz: rot.z, shrink: shrink / 100, center: shellMode0() && $('shShape').value === 'cylinder' && $('shCenter').checked ? 'circle' : 'bbox' });
   const st = phoiStats(phoi);
   faces = prepareFaces(phoi);
   const open = countOpenEdges(phoi);
-  const fired = orientPhoi(baseGeo, { unit, rx: rot.x, rz: rot.z, shrink: 0 });
+  const fired = orientPhoi(baseGeo, { unit, rx: rot.x + (num('flip') || 0), rz: rot.z, shrink: 0 });
   const fs = phoiStats(fired).size;
   $('phoiInfo').innerHTML =
     `Phôi in (đã bù co ngót): <b>${fmt(st.size[0])} × ${fmt(st.size[2])} × ${fmt(st.size[1], 0)} mm</b> (rộng × sâu × cao)<br>` +

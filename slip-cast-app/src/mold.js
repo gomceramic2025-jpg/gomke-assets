@@ -92,6 +92,32 @@ export function fillSmallHoles(geo, { maxLoop = 400, maxSpan = 0.2 } = {}) {
   return countOpenEdges(g) === 0 ? g : null;
 }
 
+// Bỏ phiếu hướng mặt: ở điểm xa nhất theo 6 hướng trục, pháp tuyến các mặt kề phải hướng ra ngoài. Trả về >0 nếu đúng, <0 nếu ngược.
+export function outwardVote(g) {
+  const P = g.attributes.position, ix = g.index.array;
+  let best = [[-1e30, -1], [-1e30, -1], [-1e30, -1], [-1e30, -1], [-1e30, -1], [-1e30, -1]];
+  for (let i = 0; i < P.count; i++) {
+    const v = [P.getX(i), P.getY(i), P.getZ(i)];
+    for (let a = 0; a < 3; a++) {
+      if (v[a] > best[a][0]) best[a] = [v[a], i];
+      if (-v[a] > best[a + 3][0]) best[a + 3] = [-v[a], i];
+    }
+  }
+  const at = new Map(); best.forEach((b, d) => { if (!at.has(b[1])) at.set(b[1], []); at.get(b[1]).push(d); });
+  const sum = best.map(() => 0);
+  const A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3(), n = new THREE.Vector3();
+  for (let t = 0; t < ix.length; t += 3) {
+    const a = ix[t], b = ix[t + 1], c = ix[t + 2];
+    const hit = at.get(a) || at.get(b) || at.get(c);
+    if (!hit) continue;
+    A.fromBufferAttribute(P, a); B.fromBufferAttribute(P, b); C.fromBufferAttribute(P, c);
+    n.subVectors(B, A).cross(C.sub(A)); // độ dài = 2 × diện tích
+    for (const d of [...(at.get(a) || []), ...(at.get(b) || []), ...(at.get(c) || [])]) sum[d] += (d < 3 ? n.getComponent(d) : -n.getComponent(d - 3));
+  }
+  let vote = 0; for (const sv of sum) vote += Math.sign(sv);
+  return vote;
+}
+
 // Chỉ giữ position, hàn các đỉnh trùng, tính lại normal, đảm bảo mặt hướng ra ngoài.
 export function cleanGeometry(geo) {
   let g = geo.index ? geo.toNonIndexed() : geo.clone();
@@ -104,11 +130,10 @@ export function cleanGeometry(geo) {
     if (a !== b && b !== c && a !== c) keep.push(a, b, c);
   }
   g.setIndex(keep);
-  if (meshVolume(g) < 0) {
-    const ix = g.index.array;
-    for (let i = 0; i < ix.length; i += 3) { const t = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = t; }
-    g.index.needsUpdate = true;
-  }
+  // Hướng mặt ra ngoài: lưới kín thì theo dấu thể tích; lưới hở thì thể tích không tin được nên bỏ phiếu theo các điểm xa nhất
+  const flipIdx = () => { const ix = g.index.array; for (let i = 0; i < ix.length; i += 3) { const t = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = t; } g.index.needsUpdate = true; };
+  if (countOpenEdges(g) === 0) { if (meshVolume(g) < 0) flipIdx(); }
+  else if (outwardVote(g) < 0) flipIdx();
   g.computeVertexNormals();
   g.computeBoundingBox();
   return g;
