@@ -220,6 +220,7 @@ async function setBaseFromFile(geo, name, buf3mf) {
   }
   { g.computeBoundingBox(); const sz = g.boundingBox.getSize(new THREE.Vector3()), mm = Math.max(sz.x, sz.y, sz.z) * (buf3mf ? 1 : (num('unit') || 1));
     if (mm < 25 || mm > 1500) notes.push(`⚠ Kích thước phôi đang là khoảng ${fmt(mm, 1)} mm, có vẻ không đúng. Hãy kiểm tra ô “Đơn vị” (mm / cm / m / inch) rồi tải lại file.`); }
+  if (i.note) notes.push(i.note);
   if (i.decimated) notes.push(`Mô hình ${k(i.trisBefore)} mặt quá nặng nên đã được giảm xuống còn ${k(i.trisAfter)} mặt.`);
   if (i.filled) notes.push(`Đã vá các lỗ nhỏ trực tiếp trên lưới gốc (${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}); giữ nguyên ${k(i.trisAfter)} mặt, không làm mất chi tiết.`);
   else if (i.repaired && i.openBefore > 0) notes.push(`Đã tự vá lưới hở: ${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}.`);

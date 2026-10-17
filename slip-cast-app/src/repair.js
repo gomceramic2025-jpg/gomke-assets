@@ -211,6 +211,7 @@ export function repairMesh(geo, { res = 120, voxel = 0, budget = 0, unit = 1, sn
   const dims = [nx, ny, nz];
   const dil = { lvl: 0, arr: surf };
   const bboxVox = (nx - 2 * pad) * (ny - 2 * pad) * (nz - 2 * pad);
+  let surfCount = 0; for (let q = 0; q < surf.length; q++) surfCount += surf[q];
   for (const { cap, occ: byOcc } of attempts) {
     // mức đóng tính theo mm (≈1,3 / 2,6 / 5,2 / 7,8 mm) để ô voxel nhỏ vẫn bịt được cùng cỡ lỗ hở
     const closeLevels = [...new Set([1.3, 2.6, 5.2, 7.8].map((mm) => Math.max(1, Math.round(mm / unit / vs))))];
@@ -242,7 +243,8 @@ export function repairMesh(geo, { res = 120, voxel = 0, budget = 0, unit = 1, sn
       }
       let inner = 0;
       for (let q = 0; q < ext.length; q++) if (!ext[q] && !barrier[q]) inner++;
-      if (inner < Math.max(20, cap ? bboxVox * 0.004 : 0)) continue; // vẫn rò: tăng mức đóng / thử cách khác
+      if (inner < Math.max(20, cap ? bboxVox * 0.004 : 0, surfCount * 0.25)) continue; // quá ít so với diện tích bề mặt: chỉ là khoang nhỏ, phần thân đã rò ra ngoài
+      void 0; // vẫn rò: tăng mức đóng / thử cách khác
       let occ = new Uint8Array(ext.length);
       for (let q = 0; q < ext.length; q++) occ[q] = ext[q] ? 0 : 1;
       for (let c = 0; c < close; c++) occ = erode(occ, nx, ny, nz);

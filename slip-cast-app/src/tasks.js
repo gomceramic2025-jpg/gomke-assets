@@ -38,6 +38,26 @@ function csgProxy(g, progress, limit = 250000) {
   } catch (e) { return g; }
 }
 
+// Dựng lại lưới có dự phòng: thử nhiều cách; kết quả quá ít mặt coi như thất bại (không để lọt ra mô hình rỗng)
+function remeshSafe(src, opt, progress) {
+  const errs = [];
+  const tries = [
+    { ...opt, note: '' },
+    { ...opt, solid: false, note: 'Không điền đầy được thành khối đặc nên chỉ vá lỗ.' },
+    { ...opt, voxel: opt.voxel ? opt.voxel / 2 : 0, res: (opt.res || 120) * 2, solid: false, note: 'Đã thử ô lưới nhỏ hơn và chỉ vá lỗ.' },
+  ];
+  for (const t of tries) {
+    try {
+      const { note, ...o } = t;
+      const r = repairMesh(src, { ...o, onProgress: progress });
+      const n = r.geometry.index ? r.geometry.index.count / 3 : 0;
+      if (n >= 200) return { r, note };
+      errs.push(`kết quả chỉ có ${n} mặt`);
+    } catch (e) { errs.push(e.message); }
+  }
+  return { r: null, note: errs[0] || '' };
+}
+
 let lastMold = null; // giữ lại để tạo hộp đổ sau đó (cần hình học gốc của từng mảnh)
 
 export const handlers = {
@@ -52,9 +72,16 @@ export const handlers = {
     if (trisRaw > Math.max(300000, heavy * 1.2)) {
       // Quá nặng để hàn đỉnh (tốn bộ nhớ): dựng lại thẳng từ các mặt gốc
       progress(`Đọc ${Math.round(trisRaw / 1000)} nghìn mặt, đang giảm mặt...`);
-      const r = repairMesh(raw, { res, voxel, budget, unit, solid, caps: buf3mf ? ['-z', '+z', '-y', '+y', '-x', '+x'] : undefined, onProgress: progress });
-      g = r.geometry;
-      info = { openBefore: -1, repaired: true, decimated: true, trisBefore: trisRaw, voxel: r.voxel, cap: r.cap };
+      const rs = remeshSafe(raw, { res, voxel, budget, unit, solid, caps: buf3mf ? ['-z', '+z', '-y', '+y', '-x', '+x'] : undefined }, progress);
+      if (rs.r) {
+        g = rs.r.geometry;
+        info = { openBefore: -1, repaired: true, decimated: true, trisBefore: trisRaw, voxel: rs.r.voxel, cap: rs.r.cap, note: rs.note };
+      } else {
+        // dựng lại thất bại: dùng lưới gốc đã hàn đỉnh, không giảm mặt
+        progress('Không dựng lại được, giữ lưới gốc...');
+        g = cleanGeometry(raw);
+        info = { openBefore: countOpenEdges(g), repaired: false, decimated: false, trisBefore: trisRaw, voxel: 0, note: 'Không dựng lại được lưới nên giữ nguyên lưới gốc (' + rs.note + '). Kiểm tra lại hình dạng và đơn vị; có thể cần sửa file trong Blender/Meshmixer.' };
+      }
     } else {
       progress('Đang làm sạch lưới...');
       g = cleanGeometry(raw);
@@ -67,9 +94,11 @@ export const handlers = {
         if (filled) { g = filled; info.repaired = true; info.filled = true; info.openBefore = openBefore; }
       }
       if (!info.filled && (tris > heavy || (openBefore > 0 && autoRepair))) {
-        const r = repairMesh(g, { res, voxel, budget, unit, solid, onProgress: progress });
-        g = r.geometry;
-        info.repaired = openBefore > 0; info.decimated = tris > heavy; info.voxel = r.voxel; info.cap = r.cap;
+        const rs = remeshSafe(g, { res, voxel, budget, unit, solid }, progress);
+        if (rs.r) {
+          g = rs.r.geometry;
+          info.repaired = openBefore > 0; info.decimated = tris > heavy; info.voxel = rs.r.voxel; info.cap = rs.r.cap; info.note = rs.note;
+        } else info.note = 'Không dựng lại được lưới nên giữ nguyên lưới gốc (' + rs.note + '). Kiểm tra lại hình dạng và đơn vị.';
       }
     }
     info.objects = objects;
