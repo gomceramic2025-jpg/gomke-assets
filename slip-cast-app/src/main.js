@@ -191,7 +191,7 @@ const deviceTier = (() => {
 
 async function setBaseFromFile(geo, name, buf3mf) {
   const voxel = parseFloat($('detail').value) || 1.3;
-  const tier = { heavy: deviceTier.heavy, budget: deviceTier.budget };
+  const tier = { heavy: deviceTier.heavy, budget: deviceTier.budget, unit: buf3mf ? 1 : (num('unit') || 1) };
   let payload, transfer;
   if (buf3mf) {
     payload = { buf3mf: new Uint8Array(buf3mf), autoRepair: $('autoRepair').checked, solid: $('autoSolid').checked, voxel, ...tier };
@@ -218,6 +218,8 @@ async function setBaseFromFile(geo, name, buf3mf) {
     const where = { '-z': 'đóng đáy phẳng phía dưới (trục Z)', '+z': 'đóng đáy phẳng phía trên (trục Z)', '-y': 'đóng đáy phẳng phía dưới (trục Y)', '+y': 'đóng đáy phẳng phía trên (trục Y)', '-x': 'đóng một đầu theo trục X âm', '+x': 'đóng một đầu theo trục X dương', 'che-chan': 'lấp các khoang và cửa hở' }[i.cap] || 'điền đầy';
     notes.push(`Mô hình là vỏ rỗng hở nên app đã ${where} và điền đầy thành khối đặc. Hãy xem lại hình dạng trước khi tạo khuôn.`);
   }
+  { g.computeBoundingBox(); const sz = g.boundingBox.getSize(new THREE.Vector3()), mm = Math.max(sz.x, sz.y, sz.z) * (buf3mf ? 1 : (num('unit') || 1));
+    if (mm < 25 || mm > 1500) notes.push(`⚠ Kích thước phôi đang là khoảng ${fmt(mm, 1)} mm, có vẻ không đúng. Hãy kiểm tra ô “Đơn vị” (mm / cm / m / inch) rồi tải lại file.`); }
   if (i.decimated) notes.push(`Mô hình ${k(i.trisBefore)} mặt quá nặng nên đã được giảm xuống còn ${k(i.trisAfter)} mặt.`);
   if (i.filled) notes.push(`Đã vá các lỗ nhỏ trực tiếp trên lưới gốc (${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}); giữ nguyên ${k(i.trisAfter)} mặt, không làm mất chi tiết.`);
   else if (i.repaired && i.openBefore > 0) notes.push(`Đã tự vá lưới hở: ${fmt(i.openBefore)} cạnh hở → ${fmt(i.openAfter)}.`);
